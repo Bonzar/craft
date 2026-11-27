@@ -1,0 +1,62 @@
+name: Base .35 synthetic OCI import qualification
+on:
+  workflow_dispatch:
+permissions: {}
+concurrency:
+  group: base-035-synthetic-oci-import
+  cancel-in-progress: false
+jobs:
+  qualify:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch'
+          && github.repository == 'Bonzar/craft'
+          && github.ref == 'refs/heads/main'
+          && github.ref_protected
+          && github.run_attempt == '1' }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 12
+    permissions:
+      contents: read
+    env:
+      GIT_TERMINAL_PROMPT: '0'
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-tags: false
+          fetch-depth: 1
+      - name: Revalidate and stage fixed public OCI
+        working-directory: tools/assertion-memory-release/rollback-input-review
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          mkdir -m 700 "$RUNNER_TEMP/base035-qualification"
+          work="$RUNNER_TEMP/base035-qualification"
+          mkdir -m 700 "$work/public"
+          python3 -B materialize_035_public_runtime.py "$work/public"
+          python3 -B stage_035_oci_layout.py stage "$work/public/oci-blobs" \
+            "$work/public/native-libraries/native-library-layer.tar" "$work/oci"
+      - name: Import exact manifest on loopback and run fixed sandbox probe only
+        working-directory: tools/assertion-memory-release/rollback-input-review
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/base035-qualification"
+          image="$(bash hosted_035_import_loopback.sh "$work/oci" "$PWD")"
+          printf '%s\n' "$image" > "$work/local-repodigest"
+          bash hosted_035_synthetic_probe.sh "$image" "$PWD"
+      - name: Purge only this ephemeral qualification
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/base035-qualification"
+          trap 'rm -rf -- "$work"' EXIT
+          if [[ -f "$work/local-repodigest" && ! -L "$work/local-repodigest" ]]; then
+            read -r image < "$work/local-repodigest"
+            [[ "$image" =~ ^127\.0\.0\.1:[0-9]+/rollback-base035@sha256:3dafba6ea29fa67f90e74f649383eb2ae3d5d40407f50db0e0ef5a1d7d59a008$ ]]
+            unset DOCKER_HOST DOCKER_CONTEXT DOCKER_TLS_VERIFY DOCKER_CERT_PATH
+            docker --host unix:///var/run/docker.sock image rm "$image" >/dev/null
+          fi

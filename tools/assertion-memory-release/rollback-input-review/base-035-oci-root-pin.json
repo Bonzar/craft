@@ -1,0 +1,15 @@
+{
+  "schema": "assertion-memory-base-035-oci-root-review/v1",
+  "registry": "docker.io/library/ubuntu",
+  "review_tag": "resolute-20261105.1",
+  "platform": {"os": "linux", "architecture": "amd64"},
+  "index": "sha256:d66b366dac61b575bee2aef07e9c26e8070096fbe84a3d4d3eb0da069b5d76db",
+  "manifest": "sha256:0d5255be560e2d2ddcfbfda88549e9e815ef29e7cd7fc62183d5709e6e2963c6",
+  "config": "sha256:a8acf325a119cb4859b1ceb593341dd917bfdad2114561165e91a607ea2ba0c3",
+  "layers": [
+    "sha256:517b871c26eac1b24d47992388bcc20e2afba3643a89e8c4a3921bfa5e1d1d28",
+    "sha256:96aae9022e0e1b310a415e7c2ff1b435d853e8eabb2711cc70f4ad4010cc81b7"
+  ],
+  "canonical_source": "953a97207f60cb0bca021a65d0417b7256f243af",
+  "build_approved": false
+}
