@@ -36,3 +36,45 @@ capability are absent unless a reviewed deployment explicitly injects a bridge
 for that exact lane, and the ingress generator defaults off separately. No
 credential/value changes, trusted route activation, or database mutation are
 included in this candidate.
+
+## Standalone TEST startup and ordinary existing ingress
+The optional source flag `--browser-owner-graph-node-removal` defaults off. It
+uses the existing synthetic TEST owner app at `127.0.0.1:8891` under the
+`assertion-test-deploy-graph.service` **user manager**, not PID 1. Its service
+credential directory is the systemd runtime credential prefix for the canonical
+TEST account and exact unit; it is checked against the current process cgroup,
+not selected by an environment path. See the [systemd credential docs](https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html#Credentials)
+and the previous protected TEST activation receipt. No additional authority is
+provisioned here. Explicit enablement fails closed when the canonical TEST unit,
+credential provisioning or root-trusted Base fingerprints do not match.
+Recognized reader and Base writer take shared nonblocking leases on the same
+existing TEST deployment lock; PROD still uses its separate reader fence.
+
+No ingress route additions are part of this patch. Before enablement, obtain a
+read-only exact-match receipt for the following:
+- `systemctl --user show assertion-test-deploy-graph.service`: verify unit ID,
+  ControlGroup/MainPID, account, effective listener/argv and existing
+  LoadCredential/LoadCredentialEncrypted/ImportCredential **names only**.
+  Verify actual cgroup-v2 path of its MainPID and the resolved systemd credential
+  directory/files by owner/mode/presence only. Do not print credential contents,
+  full process environment, configuration secrets, or operators' HTTP headers.
+- Managed TEST Gateway effective spec: both ordinary wildcard POST and PUT (or
+  existing exact overrides) select `/__mvt/api/v1/{tail}` without stripping the
+  path or body and preserve Cookie, Origin and Content-Type. Commit must preserve
+  X-CSRF-Token. No copied owner headers or public Base port.
+- Effective TEST Nginx location selection for the exact two node paths:
+  rule permits each method, rewrites only the private prefix, forwards body and
+  exact required owner-cookie headers to `127.0.0.1:8891`, not old :8829 or any
+  legacy/Sites path. Check exact and regex overrides, not just the GET wildcard.
+  Only if a real mismatch is observed should protected ingress be changed.
+
+### Later TEST acceptance, disposable synthetic fixture only
+1. Before enablement capability and exact browser routes are absent. After
+   enablement, ordinary owner login advertises node remove for TEST; anonymous,
+   wrong Origin, missing/invalid/replayed CSRF cannot mutate.
+2. Prepare and commit one isolated current thought; verify authoritative new
+   graph/search revision hides it, with raw source IDs, prior thought history
+   and independent neighbors unchanged. No second commit on retry.
+3. For a different seed referenced by another retained thought, require typed
+   `dependent_thoughts` 409 (possibly at prepare) and unchanged revision,
+   neighbors, raw and history. A changed version must require fresh review.

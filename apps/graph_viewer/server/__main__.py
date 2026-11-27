@@ -33,6 +33,13 @@ def configure_owner_lanes(args, *, prod_owner_api=None):
         raise ValueError('queue control requires the explicit standard TEST owner web app')
     if args.browser_owner_clear and not args.browser_owner_api:
         raise ValueError('Browser owner clear requires the browser API')
+    node_removal = getattr(args, 'browser_owner_graph_node_removal', False)
+    if node_removal:
+        from .graph_node_test_binding import TEST_GRAPH_ORIGIN
+        if (not args.browser_owner_api or args.queue_status_stage != 'test'
+                or args.public_origin != TEST_GRAPH_ORIGIN or args.port != 8891
+                or args.host != '127.0.0.1' or not args.synthetic_fixture):
+            raise ValueError('Graph node removal requires the canonical synthetic TEST browser app')
     if args.browser_owner_api:
         from .auth import validate_public_origin
         from .queue_dashboard import configured_browser_dashboard
@@ -59,8 +66,13 @@ def configure_owner_lanes(args, *, prod_owner_api=None):
             profile=installed_test_clear_profile()
             if args.browser_owner_clear and profile is None:
                 raise ValueError('A verified TEST clear profile is required')
-            browser=(configured_browser_api(dashboard,clear_enabled=False) if profile is None
-                     else configured_browser_api(dashboard,clear_profile=profile))
+            if node_removal:
+                from .graph_node_test_binding import installed_test_graph_node_bridge
+                bridge=installed_test_graph_node_bridge(dashboard)
+                browser=configured_browser_api(dashboard,clear_profile=profile,graph_node_bridge=bridge)
+            else:
+                browser=(configured_browser_api(dashboard,clear_enabled=False) if profile is None
+                         else configured_browser_api(dashboard,clear_profile=profile))
             from .device_test_binding import installed_test_device_binding
             device_binding=installed_test_device_binding(dashboard)
             if device_binding is not None:
@@ -101,6 +113,8 @@ def main(*, prod_owner_api=None):
                         help='Enable the Base-owned same-origin browser API on the canonical lane-local Graph listener')
     parser.add_argument('--browser-owner-clear',action='store_true',
                         help='Compatibility flag: require an independently provisioned TEST clear profile')
+    parser.add_argument('--browser-owner-graph-node-removal',action='store_true',
+                        help='Enable the one-node operation on the canonical synthetic TEST owner app')
     parser.add_argument('--queue-control',action='store_true',help='Enable owner-session-only processing pause on the standard web app')
     parser.add_argument('--static-dir',type=Path,default=Path(__file__).resolve().parents[1]/'web'/'dist')
     args=parser.parse_args()
