@@ -42,3 +42,39 @@ PYTHONPATH=tools/assertion-memory-release/operations/base-native-carrier-test:. 
 python -m unittest -v test_native_test_carrier_install test_native_carrier_parity_local \
   test_native_test_node_binding_proposal local_test_381_startup_seam
 ```
+
+## Existing hook boundary and separate operator review
+
+Current Base archives deliver the application, not the protected host hook.
+The ordinary receiver validates the immutable archive and invokes the already
+installed `/etc/assertion-release/test/service-hook.sh` under its existing
+TEST lease. Publication of the historical `base-browser-test-carrier-v0.1.1`
+only reviewed Nginx/Gateway rendering and is not authorization to replace
+this hook. Root provisioning installs it separately; default restart and
+restore are a joint systemd restart without cross-unit ownership order.
+
+Before proposing a hook operation, obtain read-only proof from an already
+authorized operator: canonical TEST hook path, root ownership, mode, link count,
+regular file and race-safe SHA-256; record exact running TEST tag, signed
+revision/archive, journal absence, and effective identity of Graph and Base
+unit files, drop-ins, MainPID/cgroup, and owners of just :8891 and :8893.
+Inspect whether the canonical independent Sites read Gate is actually enabled
+and use its installed verifier hash/status (not secret content). Preserve it.
+Report only version and expected-vs-observed typed predicates. Do not infer a
+host hash from a source blob, or infer service absence solely from a free port.
+
+A separately approved immutable TEST hook package must pin old and new
+hashes; maintain a reversible byte-for-byte previous hook, update only that
+canonical regular file with unchanged ownership, under the existing TEST
+deployment lock, and stop on drift. No new key, role, deployment channel or
+public route; no PROD policy reuse. No host change may be made just by merging
+this PR. Before permitting the app artifact, verify the independent hook
+installation and its ordinary release/restore with the two actual units.
+The source schedule and journal simulation do not implement the host adapter.
+
+The ordered schedule tests additionally exercise the exact repository
+activation journal on a real temporary filesystem:
+```sh
+PYTHONPATH=tools/assertion-memory-release/operations/base-native-carrier-test:. \
+python -m unittest -v test_paired_hook_schedule
+```
