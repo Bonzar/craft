@@ -33,6 +33,7 @@ jobs:
           # Use the vendor Chrome path covered by Ubuntu's shipped sandbox profile.
           test -x /opt/google/chrome/chrome
           google-chrome --version
+          sudo apt-get install -y --no-install-recommends xdotool
       - name: Exercise one authenticated SSE in headed sandboxed Chrome
         run: |
           export PYTHONPATH="$GITHUB_WORKSPACE"

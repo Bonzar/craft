@@ -3,7 +3,7 @@ import {readFileSync,realpathSync} from 'node:fs';
 import {join} from 'node:path';
 import {execFileSync} from 'node:child_process';
 
-test.use({ignoreHTTPSErrors:true,reducedMotion:'reduce',launchOptions:{chromiumSandbox:true}});
+test.use({ignoreHTTPSErrors:true,reducedMotion:'reduce',launchOptions:{chromiumSandbox:true,ignoreDefaultArgs:['--disable-backgrounding-occluded-windows','--disable-renderer-backgrounding']}});
 test('authenticated warm cache then exact graph delta on one SSE, with no camera or geometry jump',async({context,page})=>{
   const base=realpathSync(process.env.GRAPH_BROWSER_FIXTURE);
   const port=Number(readFileSync(join(base,'fixture-port'),'utf8'));
@@ -125,7 +125,9 @@ test('authenticated warm cache then exact graph delta on one SSE, with no camera
   await page.waitForFunction(previous=>window.__graphViewer.snapshot().camera.position.some((x,i)=>Math.abs(x-previous[i])>1e-4),warm.camera.slice(0,3));
   const before=await pose();
 
-  const other=await context.newPage();
+  // window.open with no popup features creates a normal tab in the same
+  // Chrome window. Drive Chrome's own tab-strip shortcut, not DOM events.
+  const [other]=await Promise.all([page.waitForEvent('popup'),page.evaluate(()=>{window.open('about:blank','_blank');})]);
   // Playwright enables synthetic focus for every main frame by default.
   // Restore real browser focus/visibility for this explicit tab journey.
   const [mainFocus,otherFocus]=await Promise.all([context.newCDPSession(page),context.newCDPSession(other)]);
@@ -133,8 +135,11 @@ test('authenticated warm cache then exact graph delta on one SSE, with no camera
     otherFocus.send('Emulation.setFocusEmulationEnabled',{enabled:false})]);
   await page.bringToFront();
   await page.waitForFunction(()=>document.visibilityState==='visible'&&document.hasFocus());
-  await other.bringToFront();
-  await page.waitForFunction(()=>document.visibilityState==='hidden',null,{polling:100,timeout:8000});
+  const [mainWindow,otherWindow]=await Promise.all([mainFocus.send('Browser.getWindowForTarget'),otherFocus.send('Browser.getWindowForTarget')]);
+  expect(mainWindow.windowId,'The two pages must be tabs in the same actual Chrome window').toBe(otherWindow.windowId);
+  const tabSwitch=()=>execFileSync('xdotool',['key','--clearmodifiers','ctrl+Tab'],{timeout:4000});
+  tabSwitch();
+  await expect.poll(()=>page.evaluate(()=>document.visibilityState),{timeout:8000}).toBe('hidden');
   execFileSync(process.env.GRAPH_FIXTURE_PYTHON||'python3',['-c',[
     'import sqlite3,sys',
     "with sqlite3.connect('file:'+sys.argv[1]+'?mode=rw',uri=True) as c:",
@@ -142,8 +147,10 @@ test('authenticated warm cache then exact graph delta on one SSE, with no camera
     " c.execute('INSERT INTO memory_assertions VALUES(?,?,?,?,?,?,?,?,?)',('zz-qa-live-added','Synthetic update','actor','saved','session','2025-01-01T00:00:01+00:00','2025-01-01T00:00:01+00:00','s','{}'))",
     " c.execute('UPDATE memory_state SET version=version+1 WHERE singleton=1')",
   ].join('\n'),db]);
-  await page.bringToFront();
-  await page.waitForFunction(()=>document.visibilityState==='visible');
+  // Confirm the actual transport signal arrived while this tab was away.
+  await expect.poll(()=>page.evaluate(()=>window.__fixtureFrames.includes('delta')),{timeout:12000}).toBe(true);
+  tabSwitch();
+  await expect.poll(()=>page.evaluate(()=>document.visibilityState),{timeout:8000}).toBe('visible');
   await page.waitForFunction(({rev,n})=>{
     const s=window.__graphViewer?.snapshot();
     return s?.revision&&s.revision!==rev&&s.nodeSlots===n+1&&window.__graphViewer.lodAuditData()?.revision===s.revision;
