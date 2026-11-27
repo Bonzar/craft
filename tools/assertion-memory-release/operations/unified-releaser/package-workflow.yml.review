@@ -1,0 +1,39 @@
+# A runnable read-only packaging entry once reviewed/installed under .github/workflows.
+# Currently intentionally inert at this source-review path; no release writes or environments.
+name: Package Releaser
+on:
+  workflow_dispatch:
+    inputs:
+      source_commit:
+        description: Exact reviewed protected main commit (40 lowercase hex)
+        type: string
+        required: true
+permissions: {contents: read}
+jobs:
+  build:
+    if: github.repository == 'Bonzar/craft' && github.ref == 'refs/heads/main' && github.ref_protected
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with: {persist-credentials: false}
+      - name: Build and locally verify exact protected source
+        env:
+          EXPECTED_SOURCE: ${{ inputs.source_commit }}
+          PROTECTED_SOURCE: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_SOURCE" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$EXPECTED_SOURCE" == "$PROTECTED_SOURCE" && "$(git rev-parse HEAD)" == "$PROTECTED_SOURCE" ]]
+          cd tools/assertion-memory-release/operations/unified-releaser
+          python3 -m unittest -v test_releaser test_qualify_release
+          python3 build_releaser.py > assertion-releaser.tar.gz.sha256
+          sha256sum assertion-releaser.tar.gz | cut -d ' ' -f1 | cmp - assertion-releaser.tar.gz.sha256
+          printf '%s\n' "$PROTECTED_SOURCE" > SOURCE_COMMIT
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: assertion-releaser-package
+          if-no-files-found: error
+          path: |
+            tools/assertion-memory-release/operations/unified-releaser/assertion-releaser.tar.gz
+            tools/assertion-memory-release/operations/unified-releaser/assertion-releaser.tar.gz.sha256
+            tools/assertion-memory-release/operations/unified-releaser/SOURCE_COMMIT

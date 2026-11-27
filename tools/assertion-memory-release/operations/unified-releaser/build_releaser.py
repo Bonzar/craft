@@ -6,7 +6,7 @@ from pathlib import Path
 import tarfile
 
 BASE=Path(__file__).resolve().parent
-MEMBERS=('README.md','build_releaser.py','releaser.py','test_releaser.py','workflow.yml.review')
+MEMBERS=('README.md','build_releaser.py','releaser.py','test_releaser.py','workflow.yml.review','package-workflow.yml.review','qualify_release.py','test_qualify_release.py')
 
 
 def asset():

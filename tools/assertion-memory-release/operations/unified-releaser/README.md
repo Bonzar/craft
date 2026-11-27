@@ -1,7 +1,7 @@
 # Unified releaser release, source review only
 One immutable tag/assertion-releaser-vX.Y.Z, one deterministic asset
 assertion-releaser.tar.gz, one SHA-256 for both lanes, one parameterized
-workflow and entrypoint with test|prod and apply|inverse. The branch,
+workflow and entrypoint with test|prod and apply|rollback. The branch,
 workflow, environment, and current receipt are separate authorities.
 Independent lane state in the existing canonical TEST/PROD directories
 uses isolated locks, separately authorized operation receipts and fixed
@@ -42,3 +42,14 @@ test/prod same artifact, cross-lane receipt denial, package mismatch,
 forward/inverse exact pin, replay and incomplete settlement. Domain
 installer procedures remain lane-specific; no generic shell passthrough.
 Run: python -m unittest -v test_releaser
+
+Read-only GitHub packaging proposal: package-workflow.yml.review is a separate,
+ordinary workflow entry specimen; after approved installation it can build the
+exact reviewed protected main SHA and upload one candidate bundle with its
+digest and source receipt, but cannot publish tags/releases or apply. The
+standard publisher creates an immutable draft with asset attached, then
+publishes appropriately in its already authorized flow; assertion-releaser-v
+does not match either app release trigger. The same asset is used for TEST and
+PROD. Before apply/rollback, qualify_release validates the immutable release,
+exact tag ref commit and asset; static environment branches remain fail-closed
+when no actual host operator is configured. This PR activates neither entry.

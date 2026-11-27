@@ -8,12 +8,18 @@ on:
         type: choice
         options: [test, prod]
         required: true
+      releaser_commit:
+        type: string
+        required: true
+      releaser_sha256:
+        type: string
+        required: true
       releaser_tag:
         type: string
         required: true
-      action:
+      operation:
         type: choice
-        options: [apply, inverse]
+        options: [apply, rollback]
         required: true
 permissions: {}
 jobs:
