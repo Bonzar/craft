@@ -20,7 +20,6 @@ from .search import search
 from .direct_stream import configure_test,TICKET_PATH,DIRECT_PATH,issue_ticket,direct_events
 from .owner_snapshot_stream import enabled_owner as snapshot_owner, owner_snapshot_events
 from .owner_graph_stream import owner_graph_events,graph_cache_fields
-from .owner_snapshot_release_policy import graph_v1_enabled
 
 
 class Boundary(BaseHTTPMiddleware):
@@ -394,11 +393,9 @@ def validate_static_directory(static_dir, *private_paths):
     return root
 
 
-def create_app(source_path, state_dir, *, password=None, provider_id='assertion-memory', static_dir=None, source=None, semantic_model=None, synthetic_fixture=False, public_origin=None, bridge_read_token_file=None, allowed_proxy_hosts=(), queue_dashboard=None, queue_control=False, database_clear_lane=None, database_clear_read_token_file=None, test_direct_events_origin=None, browser_owner_api=None, existing_owner_only=False, owner_snapshot_events=False, owner_graph_stream=False):
+def create_app(source_path, state_dir, *, password=None, provider_id='assertion-memory', static_dir=None, source=None, semantic_model=None, synthetic_fixture=False, public_origin=None, bridge_read_token_file=None, allowed_proxy_hosts=(), queue_dashboard=None, queue_control=False, database_clear_lane=None, database_clear_read_token_file=None, test_direct_events_origin=None, browser_owner_api=None, existing_owner_only=False, owner_snapshot_events=False):
     if type(owner_snapshot_events) is not bool:
         raise ValueError('Expected explicit owner snapshot event flag')
-    graph_v1 = graph_v1_enabled(dashboard=queue_dashboard,browser=browser_owner_api,
-                                public_origin=public_origin,explicit_test=owner_graph_stream)
     # The legacy Sites env binding is deliberately read-only. Mutation must be
     # installed by the standard owner-session web app at startup.
     if type(queue_control) is not bool or queue_control and getattr(queue_dashboard,'stage',None) != 'test':
@@ -464,6 +461,9 @@ def create_app(source_path, state_dir, *, password=None, provider_id='assertion-
                   middleware=[Middleware(Boundary),Middleware(GZipMiddleware,minimum_size=1500)])
     app.state.public_origin=browser_origin
     app.state.owner_snapshot_events=owner_snapshot_events
+    # Feature availability belongs to the authenticated Graph contract, not rollout.
+    from .browser_owner_api import BrowserOwnerAPI
+    graph_v1 = type(browser_owner_api) is BrowserOwnerAPI and browser_origin is not None
     app.state.owner_graph_stream=graph_v1
     if graph_v1:
         import secrets

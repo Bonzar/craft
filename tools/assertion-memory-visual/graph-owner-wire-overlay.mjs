@@ -17,14 +17,13 @@ export const graphWirePrelude='const {openOwnerGraphSession,ownerGraphCache,brow
 export const graphWireMethods=`
 readOwnerGraphAuth(state){
   this.releaseGraphOwner=typeof state.graph_cache_scope==='string'&&/^[a-f0-9]{64}$/.test(state.graph_cache_scope)?state.graph_cache_scope:null;
-  this.releaseGraphStage=state.graph_cache_stage==='test'||state.graph_cache_stage==='prod'?state.graph_cache_stage:null;
   this.releaseGraphEpoch=typeof state.graph_cache_epoch==='string'&&/^[a-f0-9]{64}$/.test(state.graph_cache_epoch)?state.graph_cache_epoch:null;
 }
 closeGraphWire(){
   this.releaseGraphWire?.close();this.releaseGraphWire=null;this.releaseGraphWireKey=null;
 }
 discardGraphWireCache(){
-  this.closeGraphWire();this.releaseGraphPlacementState=null;this.releaseGraphOwner=null;this.releaseGraphStage=null;this.releaseGraphEpoch=null;
+  this.closeGraphWire();this.releaseGraphPlacementState=null;this.releaseGraphOwner=null;this.releaseGraphEpoch=null;
   void (this.releaseGraphCache??=ownerGraphCache(browserOwnerTopologyStore())).clear();
 }
 openGraphWire(context){
@@ -33,7 +32,7 @@ openGraphWire(context){
   this.releaseOwnerStartupPending=false;
   this.graphRequest?.abort();this.stream?.close();this.stream=null;this.stopReleaseOwnerLive();this.closeGraphWire();
   const selector=context.selector,provider=config.provider_id,origin=location.origin;
-  const scope=ownerGraphCheckpointKey({origin,stage:this.releaseGraphStage,owner:this.releaseGraphOwner,provider,selector});
+  const scope=ownerGraphCheckpointKey({origin,owner:this.releaseGraphOwner,provider,selector});
   const key=Symbol(),viewKey=scope??JSON.stringify([origin,provider,selector]);
   this.releaseGraphWireKey=key;
   const cache=this.releaseGraphCache??=ownerGraphCache(browserOwnerTopologyStore());
@@ -120,7 +119,7 @@ async graphWirePlacement(graph,worker,options){
 export function patchGraphWire(script,once){
   const replace=(from,to)=>{script=once(script,from,to);};
   replace('owner_live_bootstrap:d(c,null),capabilities:', 'owner_live_bootstrap:d(c,null),owner_live_graph_v1:d(s,!1),capabilities:');
-  replace('csrf_token:d(i,``)}),ue=', 'csrf_token:d(i,``),graph_cache_scope:d(c,null),graph_cache_stage:d(c,null),graph_cache_epoch:d(c,null)}),ue=');
+  replace('csrf_token:d(i,``)}),ue=', 'csrf_token:d(i,``),graph_cache_scope:d(c,null),graph_cache_epoch:d(c,null)}),ue=');
   replace('this.csrf=e.csrf_token,await this.start()', 'this.readOwnerGraphAuth(e),this.csrf=e.csrf_token,await this.start()');
   replace('this.csrf=t.csrf_token,e.value=``,await this.start()', 'this.readOwnerGraphAuth(t),this.csrf=t.csrf_token,e.value=``,await this.start()');
   replace('this.loading.hidden=!0,this.stopReleaseOwnerLive(),this.stream?.close()', 'this.loading.hidden=!0,this.discardGraphWireCache(),this.stopReleaseOwnerLive(),this.stream?.close()');

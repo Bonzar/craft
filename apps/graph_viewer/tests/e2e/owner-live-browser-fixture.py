@@ -3,7 +3,6 @@ from pathlib import Path
 import socket
 import subprocess
 import sys
-from unittest.mock import patch
 import uvicorn
 from starlette.staticfiles import StaticFiles
 
@@ -34,13 +33,10 @@ if __name__ == '__main__':
         sock.listen(32)
         port = sock.getsockname()[1]
         browser = BrowserOwnerAPI(stage='test', perform=no_queue, queue_snapshot=no_queue, dashboard_live=False)
-        # Only the disposable loopback fixture substitutes the production deployment gate.
-        # HTTP boundary, login, cookie, storage scope, Graph polling and wire are real.
-        with patch('apps.graph_viewer.server.app.graph_v1_enabled', return_value=True):
-            app = create_app(db, run / 'state', password='synthetic-only-owner',
-                             synthetic_fixture=True,
-                             public_origin=f'https://127.0.0.1:{port}',
-                             browser_owner_api=browser, owner_graph_stream=True)
+        app = create_app(db, run / 'state', password='synthetic-only-owner',
+                         synthetic_fixture=True,
+                         public_origin=f'https://127.0.0.1:{port}',
+                         browser_owner_api=browser)
         frontend = StaticFiles(directory=static, html=True)
 
         async def fixture_entrypoint(scope, receive, send):

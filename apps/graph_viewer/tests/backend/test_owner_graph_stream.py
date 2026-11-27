@@ -231,13 +231,13 @@ class UnifiedGraphStream(IsolatedAsyncioTestCase):
         m.graphs[B].manifest['counts']={'fixture':w.FRAME_LIMIT*'x'}
         self.assertIsNone(w.retained(m,SEL,A,0,epoch_name(GEN)))
 
-    async def test_verified_stage_only_when_existing_bound_browser_authority_names_it(self):
+    async def test_cache_contract_does_not_depend_on_release_lane(self):
         req=Request(Manager())
         self.assertNotIn('graph_cache_stage',w.graph_cache_fields(req))
         req.app.state.browser_owner_api=SimpleNamespace(stage='test')
         info=w.graph_cache_fields(req)
         self.assertIs(info['owner_live_graph_v1'],True)
-        self.assertEqual(info['graph_cache_stage'],'test')
+        self.assertNotIn('graph_cache_stage',info)
         self.assertRegex(info['graph_cache_scope'],r'^[a-f0-9]{64}$')
 
     async def test_logout_while_chunk_is_read_never_emits_chunk_and_cancellation_closes(self):

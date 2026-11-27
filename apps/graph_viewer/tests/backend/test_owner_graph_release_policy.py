@@ -1,52 +1,75 @@
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
+
+from starlette.responses import JSONResponse
 from starlette.testclient import TestClient
 
 from apps.graph_viewer.server import app as appmod
 from apps.graph_viewer.server.browser_owner_api import BrowserOwnerAPI
-from apps.graph_viewer.server.graph_node_test_binding import TEST_GRAPH_ORIGIN
-from apps.graph_viewer.server.owner_snapshot_release_policy import enabled,graph_v1_enabled
-from apps.graph_viewer.server.queue_dashboard import HostedQueueDashboard
 
 
-def bound(lane):
-    dashboard=object.__new__(HostedQueueDashboard)
-    dashboard.stage=lane
-    browser=BrowserOwnerAPI(stage=lane,perform=lambda *a:None,queue_snapshot=lambda *a:None)
-    return dashboard,browser
+def build(origin, lane=None, *, legacy=False):
+    browser = (None if lane is None else
+               BrowserOwnerAPI(stage=lane, perform=lambda *a: None, queue_snapshot=lambda *a: None))
+    with patch.object(appmod, 'OwnerStore'), patch.object(appmod, 'GraphManager'), \
+            patch.object(appmod, 'source_for_path'):
+        app=appmod.create_app(Path('/fixture/source'), Path('/fixture/state'), public_origin=origin,
+                              existing_owner_only=False, browser_owner_api=browser,
+                              owner_snapshot_events=legacy)
+    app.state.owner=SimpleNamespace(session=lambda request:
+        'synthetic authenticated owner' if request.cookies.get('fixture')=='owner' else None)
+    app.state.manager.source.capabilities.return_value={'capabilities':{'live':True},'readiness':[]}
+    app.state.manager.live_profiles=[]
+    app.state.manager.sync_generation.return_value=(1,2,'0'*32)
+    return app
 
 
-class GraphDataReleasePolicy(unittest.TestCase):
-    def test_legacy_test_metadata_does_not_implicitly_admit_graph_v1(self):
-        dashboard,browser=bound('test')
-        self.assertTrue(enabled(dashboard=dashboard,browser=browser))
-        self.assertFalse(graph_v1_enabled(dashboard=dashboard,browser=browser,
-                                          public_origin=TEST_GRAPH_ORIGIN))
-        with patch.object(appmod,'OwnerStore'),patch.object(appmod,'GraphManager'), \
-                patch.object(appmod,'source_for_path'):
-            app=appmod.create_app(Path('/fixture/source'),Path('/fixture/state'),
-                                  public_origin=TEST_GRAPH_ORIGIN,queue_dashboard=dashboard,
-                                  browser_owner_api=browser,owner_snapshot_events=True)
-        self.assertTrue(app.state.owner_snapshot_events)
+class GraphDataCapability(unittest.TestCase):
+    def test_owner_feature_is_not_a_test_prod_or_release_decision(self):
+        for origin,lane in (('https://one.invalid','test'),('https://two.invalid','prod')):
+            with self.subTest(origin=origin):
+                app=build(origin,lane)
+                self.assertTrue(app.state.owner_graph_stream)
+                client=TestClient(app,base_url=origin)
+                anon=client.get('/api/v1/events?wire=graph-v1')
+                self.assertEqual(anon.status_code,401)
+                self.assertEqual(set(anon.json()),{'error'})
+                client.cookies.set('fixture','owner')
+                self.assertIs(client.get('/api/v1/capabilities').json()['owner_live_graph_v1'],True)
+                self.assertEqual(client.get('/api/v1/events?wire=graph-v1',
+                                     headers={'Sec-Fetch-Site':'cross-site'}).status_code,401)
+
+    def test_old_visual_uses_unchanged_snapshot_and_metadata_routes_on_new_base(self):
+        origin='https://legacy-owner.invalid'
+        app=build(origin,'test',legacy=True)
+        client=TestClient(app,base_url=origin)
+        client.cookies.set('fixture','owner')
+        async def local_marker(request):
+            return JSONResponse({'legacy_snapshot':True})
+        # Exercise actual production routing/Boundary; replace only output
+        # producers so these tests cannot start a service or touch real data.
+        with patch.object(appmod,'owner_snapshot_events',side_effect=local_marker) as old, \
+                patch.object(appmod,'owner_graph_events') as new:
+            self.assertEqual(client.get('/api/v1/events').json(),{'legacy_snapshot':True})
+            old.assert_called_once()
+            new.assert_not_called()
+        graph=SimpleNamespace(revision='1'*32,manifest={'legacy_graph':True})
+        app.state.manager.ensure=AsyncMock(return_value=graph)
+        with patch.object(appmod,'owner_graph_events') as new:
+            old=client.get('/api/v1/graph')
+            self.assertEqual(old.status_code,200)
+            self.assertIs(old.json()['legacy_graph'],True)
+            app.state.manager.ensure.assert_awaited_once()
+            new.assert_not_called()
+
+    def test_legacy_non_owner_adapter_cannot_expose_graph_data_stream(self):
+        origin='https://legacy-bridge.invalid'
+        app=build(origin,legacy=True)
         self.assertFalse(app.state.owner_graph_stream)
         self.assertFalse(hasattr(app.state,'owner_graph_stream_key'))
-        client=TestClient(app,base_url=TEST_GRAPH_ORIGIN)
+        client=TestClient(app,base_url=origin)
+        client.cookies.set('fixture','owner')
+        self.assertNotIn('owner_live_graph_v1',client.get('/api/v1/capabilities').json())
         self.assertEqual(client.get('/api/v1/events?wire=graph-v1').status_code,401)
-
-    def test_explicit_flag_accepts_only_same_origin_protected_test_pair(self):
-        test,browser=bound('test')
-        prod,pbrowser=bound('prod')
-        self.assertTrue(graph_v1_enabled(dashboard=test,browser=browser,
-                          public_origin=TEST_GRAPH_ORIGIN,explicit_test=True))
-        for d,b,o in ((prod,pbrowser,TEST_GRAPH_ORIGIN),(test,pbrowser,TEST_GRAPH_ORIGIN),
-                      (None,None,TEST_GRAPH_ORIGIN),(test,browser,'https://wrong.invalid')):
-            with self.subTest(origin=o,lane=getattr(d,'stage',None)),self.assertRaises(ValueError):
-                graph_v1_enabled(dashboard=d,browser=b,public_origin=o,explicit_test=True)
-        with self.assertRaises(ValueError):
-            graph_v1_enabled(dashboard=test,browser=browser,public_origin=TEST_GRAPH_ORIGIN,
-                             explicit_test='true')
-        with self.assertRaises(ValueError):
-            appmod.create_app(Path('/fixture/source'),Path('/fixture/state'),
-                public_origin=TEST_GRAPH_ORIGIN,queue_dashboard=prod,
-                browser_owner_api=pbrowser,owner_graph_stream=True)

@@ -41,7 +41,7 @@ test('actual packed graph-v1 adapter stays on one graph stream, retains world en
       return this.graphWirePlacement(graph,worker,placement).then(x=>{positions.push(x);return null;});
     },
   });
-  v.readOwnerGraphAuth({graph_cache_scope:E2,graph_cache_stage:"test",graph_cache_epoch:E});
+  v.readOwnerGraphAuth({graph_cache_scope:E2,graph_cache_epoch:E});
   await v.openGraphWire(context);
   assert.equal(pending.length,1);
   assert.equal(pending[0].verifiedEpoch,E);
@@ -80,4 +80,28 @@ test('actual packed scene captures current pose after async validation and resto
   restore();
   assert.deepEqual([cam.position.x,cam.quaternion.x,cam.zoom,cam.near,cam.far,controls.target.x,controls.minDistance,controls.maxDistance],
     [4,7,4,2,900,17,10,100]);
+});
+
+
+test('packed new Visual uses the unchanged legacy bootstrap on an old Base contract',async()=>{
+  const files=await versionableBundle(new URL('.',import.meta.url).pathname);
+  const js=files['assets/index-Byv8wmN9.js'].toString();
+  const start=js.indexOf('bootstrapReleaseOwnerGraph(){'),end=js.indexOf('\nstopReleaseOwnerLive(){',start);
+  assert.ok(start>0&&end>start,'packed startup method must be independently observable');
+  const calls=[];
+  const Viewer=vm.runInNewContext('class Viewer{'+js.slice(start,end)+'}; Viewer',{
+    releaseFirstOwnerSnapshot:callback=>{
+      calls.push('legacy-bootstrap');
+      return {fallback:()=>{calls.push('legacy-snapshot');return callback(null)},ready:Promise.resolve()};
+    },
+    dispatchEvent:()=>{},CustomEvent:class{constructor(type){this.type=type}},
+  });
+  const v=new Viewer();
+  Object.assign(v,{authenticated:true,capabilities:{capabilities:{live:true},owner_live_bootstrap:1},
+    currentContext:()=>({selector:{mode:'current'}}),
+    openGraphWire:()=>assert.fail('old Base must receive no graph-v1 request'),
+    stopReleaseOwnerLive:()=>{},ensureReleaseScene:()=>{},setConnection:()=>{},
+    loadGraph:()=>calls.push('legacy-read')});
+  await v.bootstrapReleaseOwnerGraph();
+  assert.deepEqual(calls,['legacy-bootstrap','legacy-snapshot','legacy-read']);
 });

@@ -384,17 +384,15 @@ class Viewer {
   private graphWireKey:symbol|null=null;
   private graphWireCache:OwnerGraphCache|null=null;
   private graphWireOwner:string|null=null;
-  private graphWireStage:string|null=null;
   private graphWireEpoch:string|null=null;
   private graphWirePlacement:OwnerPlacement|null=null;
-  private readGraphWireAuth(state:{graph_cache_scope:unknown;graph_cache_stage:unknown;graph_cache_epoch:unknown}):void{
+  private readGraphWireAuth(state:{graph_cache_scope:unknown;graph_cache_epoch:unknown}):void{
     this.graphWireOwner=typeof state.graph_cache_scope==='string'&&/^[a-f0-9]{64}$/.test(state.graph_cache_scope)?state.graph_cache_scope:null;
-    this.graphWireStage=state.graph_cache_stage==='test'||state.graph_cache_stage==='prod'?state.graph_cache_stage:null;
     this.graphWireEpoch=typeof state.graph_cache_epoch==='string'&&/^[a-f0-9]{64}$/.test(state.graph_cache_epoch)?state.graph_cache_epoch:null;
   }
   private closeGraphWire():void{this.graphWire?.close();this.graphWire=null;this.graphWireKey=null;}
   private discardGraphWire():void{
-    this.closeGraphWire();this.graphWirePlacement=null;this.graphWireOwner=null;this.graphWireStage=null;this.graphWireEpoch=null;
+    this.closeGraphWire();this.graphWirePlacement=null;this.graphWireOwner=null;this.graphWireEpoch=null;
     void (this.graphWireCache??=ownerGraphCache(browserOwnerTopologyStore())).clear();
   }
   private openGraphWire(context:SliceContext):Promise<void>{
@@ -403,7 +401,7 @@ class Viewer {
     this.ownerStartupPending=false;
     this.graphRequest?.abort();this.stream?.close();this.stream=null;this.stopOwnerLive();
     const {selector}=context, provider=caps.provider_id, origin=location.origin;
-    const scope=ownerGraphCheckpointKey({origin,stage:this.graphWireStage,owner:this.graphWireOwner,provider,selector});
+    const scope=ownerGraphCheckpointKey({origin,owner:this.graphWireOwner,provider,selector});
     const placementScope=scope??JSON.stringify([origin,provider,selector]);
     const key=Symbol();this.graphWireKey=key;
     const cache=this.graphWireCache??=ownerGraphCache(browserOwnerTopologyStore());

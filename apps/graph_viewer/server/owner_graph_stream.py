@@ -86,9 +86,6 @@ def graph_cache_fields(request,token=None):
         return fields
     scope,epoch=cache
     fields.update(graph_cache_scope=scope,graph_cache_epoch=epoch)
-    lane=getattr(getattr(request.app.state,'browser_owner_api',None),'stage',None)
-    if lane in ('test','prod'):
-        fields['graph_cache_stage']=lane
     return fields
 
 def parse_start(request):

@@ -4,14 +4,14 @@ const EPOCH=/^[a-f0-9]{64}$/, REV=/^[a-f0-9]{32}$/, CURSOR=/^(0|[1-9][0-9]{0,19}
 const DB='private-owner-graph-topology-v1', STORE='checkpoint';
 const FIELDS=['mode','at','history','undated','session_id','run_id','output_snapshot_id'];
 const MAX_NODES=2_000_000,MAX_EDGES=4_000_000;
-export function ownerGraphCheckpointKey({origin,stage,owner,provider,selector}){
+export function ownerGraphCheckpointKey({origin,owner,provider,selector}){
   if(typeof origin!=='string'||typeof owner!=='string'||!EPOCH.test(owner)||
-      (stage!=='test'&&stage!=='prod')||typeof provider!=='string'||!provider||provider.length>160||!selector)return null;
+      typeof provider!=='string'||!provider||provider.length>160||!selector)return null;
   let u;try{u=new URL(origin);}catch{return null;}
   if(u.origin!==origin||u.protocol!=='https:')return null;
   const shape=FIELDS.map(field=>selector[field]??null);
   if(shape.some(x=>x!==null&&typeof x!=='boolean'&&typeof x!=='number'&&(typeof x!=='string'||x.length>200)))return null;
-  return JSON.stringify([1,origin,stage,owner,provider,shape]);
+  return JSON.stringify([1,origin,owner,provider,shape]);
 }
 
 export function copyOwnerTopology({epoch,revision,cursor,ids,graph,visualPositions,view}){
