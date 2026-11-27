@@ -24,7 +24,7 @@ _USAGE = {
     'reasoning_output_tokens': 'gen_ai.usage.reasoning.output_tokens',
 }
 _ERROR_STATUSES = ('failed', 'timeout', 'unavailable', 'interrupted')
-_STAGE_STATUS = frozenset((*_ERROR_STATUSES, 'ok', 'partial', 'miss', 'ready'))
+_STAGE_STATUS = frozenset((*_ERROR_STATUSES, 'ok', 'partial', 'miss', 'ready', 'queued', 'reused'))
 _TRACE_ID = re.compile(r'[0-9a-f]{32}\Z')
 _span = ContextVar('memory_query_otlp_span', default=None)
 _exporter = None
@@ -114,7 +114,7 @@ class _Span:
     genai: bool = False
 
 
-def begin(stage, ids, *, queue_wait_ms=None):
+def begin(stage, ids, *, queue_wait_ms=None, backdate_ms=0):
     exporter = _exporter
     if exporter is None:
         return None
@@ -124,7 +124,8 @@ def begin(stage, ids, *, queue_wait_ms=None):
             return None
         parent = _span.get()
         same_trace = parent is not None and parent.trace_id == trace_id
-        span = _Span(stage, trace_id, uuid4().hex[:16], time_ns(), monotonic_ns(),
+        backdate_ns = min(backdate_ms * 1_000_000, time_ns())
+        span = _Span(stage, trace_id, uuid4().hex[:16], time_ns() - backdate_ns, monotonic_ns() - backdate_ns,
                      parent.span_id if same_trace else None, exporter)
         if type(queue_wait_ms) is int and 0 <= queue_wait_ms < 2**53:
             span.attributes['memory.queue_wait_ms'] = queue_wait_ms
@@ -135,6 +136,16 @@ def begin(stage, ids, *, queue_wait_ms=None):
         return span, _span.set(span)
     except Exception:
         return None
+
+
+def measured(stage, ids, status, duration_ms, *, retry_count=None):
+    """Export an already completed local measurement on the same trace."""
+    if status not in _STAGE_STATUS or type(duration_ms) is not int or not 0 <= duration_ms < 2**53:
+        return
+    handle = begin(stage, ids, backdate_ms=duration_ms)
+    if handle and type(retry_count) is int and 0 < retry_count < 2**31:
+        handle[0].attributes['memory.retry_count'] = retry_count
+    end(handle, status)
 
 
 def outcome(status):

@@ -15,6 +15,8 @@ from time import monotonic, sleep, time_ns
 ROOT=Path(__file__).resolve().parent
 DUMMY={'MONIUM_TRACES_PROJECT':'synthetic-project','MONIUM_TRACES_APPLICATION_KEY':'synthetic-key'}
 SECRET='FICTIONAL_PAYLOAD_NOT_FOR_EXPORT'
+QUERY_STAGES=('query_response_wait','ready_result_persist','answer_persist',
+              'answer_check_write','model_step_replay')
 
 
 def attr(key,value):
@@ -30,6 +32,10 @@ def resource(lane, specs, *, scope='assertion_memory.query_timing', service=None
               'traceState':'fixture='+SECRET,'status':{'code':2,'message':SECRET},'events':[{'name':SECRET,'timeUnixNano':start}],
               'attributes':[attr('gen_ai.operation.name','chat'),attr('gen_ai.input.messages',SECRET),
                             attr('memory.stage','provider_attempt'),attr('unknown',SECRET)]}
+        if serial==8:
+            span['attributes'].append({'key':'memory.retry_count','value':{'intValue':'2'}})
+        else:
+            span['attributes'].append(attr('memory.retry_count',SECRET))
         if linked:
             span['links']=[{'traceId':'2'*32,'spanId':'2'*16,'attributes':[attr('unknown',SECRET)]}]
         spans.append(span)
@@ -42,7 +48,10 @@ def resource(lane, specs, *, scope='assertion_memory.query_timing', service=None
 def fixture(lane):
     opposite='prod' if lane=='test' else 'test'
     return {'resourceSpans':[
-        resource(lane,[(1,'openai.chat',False),(2,SECRET,False),(3,'openai.chat',True)]),
+        resource(lane,[(1,'openai.chat',False),(2,SECRET,False),(3,'openai.chat',True),
+                       (8,'memory_query.result_persist',False),
+                       *((serial,'memory_query.'+stage,False)
+                         for serial,stage in enumerate(QUERY_STAGES,9))]),
         resource(opposite,[(4,'openai.chat',False)]),
         resource(lane,[(5,'openai.chat',False)],scope='foreign'),
         resource(opposite,[(6,'openai.chat',False)],service='assertion-memory-'+lane),
@@ -99,8 +108,14 @@ def smoke(binary,lane):
                 assert headers['x-monium-project']==DUMMY['MONIUM_TRACES_PROJECT']
                 assert SECRET not in json.dumps(body),'payload escaped allowlist'
                 spans=[span for r in body['resourceSpans'] for s in r['scopeSpans'] for span in s['spans']]
-                assert len(spans)==1 and int(spans[0]['spanId'],16)==1,'wrong span crossed filter'
-                assert not spans[0].get('events') and not spans[0].get('links')
+                expected={1:'openai.chat',8:'memory_query.result_persist',
+                          **{serial:'memory_query.'+stage for serial,stage in enumerate(QUERY_STAGES,9)}}
+                seen={int(span['spanId'],16):span for span in spans}
+                assert len(spans)==len(expected) and {i:p['name'] for i,p in seen.items()}==expected,'wrong span crossed filter'
+                for i,span in seen.items():
+                    assert not span.get('events') and not span.get('links')
+                    counts=[a['value'] for a in span['attributes'] if a['key']=='memory.retry_count']
+                    assert counts==([{'intValue':'2'}] if i==8 else []),'wrong retry metadata crossed filter'
                 print(lane+': exact lane, sanitized span, no cloud connection')
             except BaseException:
                 logs.seek(0)

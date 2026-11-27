@@ -161,6 +161,7 @@ def make_app(profile, catalog, gateway_token, read_live_release, forward=None, *
         if scope["type"] != "http": return
 
         received_at = monotonic()
+        query_trace = []
         machine=scope.get('path')==f'/memory-api-{lane}' and bool(machine_digests)
         async def reply(status, data, *, query_job_id=None):
             raw=json.dumps(data, separators=(",",":"), ensure_ascii=True).encode()
@@ -268,13 +269,18 @@ def make_app(profile, catalog, gateway_token, read_live_release, forward=None, *
                         from prototypes.assertion_memory.fresh_processing import authenticated_fresh_mac
                         with authenticated_fresh_mac():
                             value=await operations.invoke(name,args)
+                    elif name == QUERY and args.get('query_job_id') is None:
+                        from prototypes.assertion_memory import query_timing as timing
+                        with timing.transport_trace() as query_trace:
+                            value=await operations.invoke(name,args)
                     else:
                         value=await operations.invoke(name,args)
                     if type(value) is not dict: raise ValueError()
                     json.dumps(value,separators=(",",":"),ensure_ascii=True,allow_nan=False)
                 if await asyncio.to_thread(read_live_release)!=identity: raise ValueError()
             if operations is not None:
-                job_id = value.get('query_job_id') if name == QUERY and args.get('query_job_id') is None else None
+                job_id = (query_trace[0] if query_trace else value.get('query_job_id')) \
+                    if name == QUERY and args.get('query_job_id') is None else None
                 return await reply(200,{"environment":lane,"request_id":rid,**receipt,
                                         "status":"ok","result":value},query_job_id=job_id)
             if operations is None:
