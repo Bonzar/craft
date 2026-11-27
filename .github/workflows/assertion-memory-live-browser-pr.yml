@@ -23,16 +23,17 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: "24"
-      - name: Install pinned lexical and browser dependencies
+      - name: Build native app and install pinned Playwright
         run: |
           grep -v '^fastembed==' apps/graph_viewer/requirements.txt > "$RUNNER_TEMP/graph-lexical.txt"
           python -m pip install -r "$RUNNER_TEMP/graph-lexical.txt"
           npm ci --prefix apps/graph_viewer
           npm run build --prefix apps/graph_viewer
           npm ci --prefix apps/graph_viewer/tests/e2e
-          cd apps/graph_viewer/tests/e2e
-          npx --no-install playwright install --with-deps chromium
-      - name: Exercise one authenticated SSE in headed sandboxed Chromium
+          # Use the vendor Chrome path covered by Ubuntu's shipped sandbox profile.
+          test -x /opt/google/chrome/chrome
+          google-chrome --version
+      - name: Exercise one authenticated SSE in headed sandboxed Chrome
         run: |
           export PYTHONPATH="$GITHUB_WORKSPACE"
           export GRAPH_BROWSER_FIXTURE="$RUNNER_TEMP/owner-live-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
@@ -55,4 +56,4 @@ jobs:
           done
           [[ "$ready" == 1 ]] || { echo "::error::Disposable TLS fixture failed to start"; exit 1; }
           cd apps/graph_viewer/tests/e2e
-          xvfb-run -a npm test -- owner-live-browser.spec.js --project=chromium --headed
+          xvfb-run -a npm test -- owner-live-browser.spec.js --project=desktop-chrome --headed

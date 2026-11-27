@@ -5,6 +5,7 @@ import subprocess
 import sys
 from unittest.mock import patch
 import uvicorn
+from starlette.staticfiles import StaticFiles
 
 from apps.graph_viewer.server.app import create_app
 from apps.graph_viewer.server.browser_owner_api import BrowserOwnerAPI
@@ -37,11 +38,19 @@ if __name__ == '__main__':
         # HTTP boundary, login, cookie, storage scope, Graph polling and wire are real.
         with patch('apps.graph_viewer.server.app.graph_v1_enabled', return_value=True):
             app = create_app(db, run / 'state', password='synthetic-only-owner',
-                             static_dir=static, synthetic_fixture=True,
+                             synthetic_fixture=True,
                              public_origin=f'https://127.0.0.1:{port}',
                              browser_owner_api=browser, owner_graph_stream=True)
+        frontend = StaticFiles(directory=static, html=True)
+
+        async def fixture_entrypoint(scope, receive, send):
+            # Visual and Graph remain separate applications, sharing only this
+            # fixture's loopback origin. No API path can enter the static app.
+            target = frontend if scope['type'] == 'http' and not scope['path'].startswith('/api/') else app
+            await target(scope, receive, send)
+
         (run / 'fixture-port').write_text(str(port), encoding='ascii')
         uvicorn.Server(uvicorn.Config(
-            app, ssl_keyfile=str(key), ssl_certfile=str(cert), host='127.0.0.1',
+            fixture_entrypoint, ssl_keyfile=str(key), ssl_certfile=str(cert), host='127.0.0.1',
             port=port, proxy_headers=False, log_level='warning', access_log=False,
         )).run(sockets=[sock])
