@@ -82,15 +82,24 @@ openGraphWire(context){
       this.selector={...manifest.selector};this.acceptedContext={selector:{...manifest.selector},day:context.day,zone:context.zone};
       this.sessionFilter?.bind(manifest);this.applyContextInputs(this.acceptedContext);this.updateCounts();
       this.selectedOrdinal=rebound??null;this.updateReaderConnections();this.loading.hidden=true;
-      if(kind!=='cached')globalThis.dispatchEvent?.(new CustomEvent('owner-live-snapshot',{detail:{epoch:frame.epoch,queue:false}}));
       return {epoch:frame.epoch,revision:frame.revision,cursor:frame.cursor,ids,graph,visualPositions:placement.result,view:{manifest,topics}};
     }catch(error){if(this.worker!==next)next.dispose();throw error;}
+  };
+  let queueReleased=false;
+  const releaseQueue=(epoch=null)=>{
+    if(queueReleased)return;
+    queueReleased=true;
+    if(epoch)globalThis.dispatchEvent(new CustomEvent('owner-live-snapshot',{detail:{epoch,queue:false}}));
+    else globalThis.dispatchEvent(new CustomEvent('owner-live-offline'));
   };
   const session=openOwnerGraphSession({selector,scope,verifiedEpoch:this.releaseGraphEpoch,cache:{
       take:async key=>{const value=await cache.take(key);return value?.view?value:null;},
       save:(key,value)=>cache.save(key,value),clear:()=>cache.clear(),
     },
-    onCached:(value,signal)=>apply(value,signal,'cached'),onSnapshot:(value,signal)=>apply(value,signal,'baseline'),
+    onCached:(value,signal)=>apply(value,signal,'cached'),onSnapshot:(value,signal)=>{
+    if(current(signal))releaseQueue(value.epoch);
+    return apply(value,signal,'baseline');
+  },
     onDelta:(value,signal)=>apply(value,signal,'delta'),
     onReset:({epoch},signal)=>{
       if(!current(signal))return;
@@ -108,6 +117,8 @@ openGraphWire(context){
       if(state==='unauthorized'){this.discardGraphWireCache();this.clearReleaseOwnerLiveGraph();this.showLogin();return;}
       const text={live:'Live · обновляется',connecting:'Подключаемся к live-потоку',
          'snapshot-connecting':'Снимок · подключаемся к Live','snapshot-offline':'Нет live-связи · снимок',offline:'Нет live-связи'};
+      if(state==='live'&&this.releaseGraphPlacementState?.epoch)releaseQueue(this.releaseGraphPlacementState.epoch);
+      if(state==='offline'||state==='snapshot-offline')releaseQueue();
       this.setConnection(text[state]??'Нет live-связи',state==='live');
     }});
   this.releaseGraphWire=session;return session.initial;

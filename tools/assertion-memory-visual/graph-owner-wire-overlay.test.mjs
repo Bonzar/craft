@@ -63,7 +63,7 @@ test('actual packed graph-v1 adapter stays on one graph stream, retains world en
   assert.equal(signIn,1);
   assert.equal(cacheClears,1);
   await assert.rejects(stream.onSnapshot(input(R,E,'10',['different']),signal),e=>e.name==='AbortError');
-  assert.deepEqual(events,['owner-live-snapshot','owner-live-snapshot']);
+  assert.deepEqual(events,['owner-live-snapshot'],'queue readiness is emitted only once; graph updates still apply');
 });
 
 test('actual packed scene captures current pose after async validation and restores all camera fields',async()=>{
