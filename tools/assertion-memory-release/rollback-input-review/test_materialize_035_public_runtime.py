@@ -31,3 +31,49 @@ class PublicRuntime(unittest.TestCase):
             redirect.redirect_request(req,None,302,None,{},"https://unexpected.invalid/blob")
         result = redirect.redirect_request(req,None,302,None,{},"https://production.cloudflare.docker.com/blob")
         self.assertIsNone(result.get_header("Authorization"))
+
+
+    def test_only_documented_cloudfront_blob_host_and_no_credentials(self):
+        documented="https://production.cloudfront.docker.com/blob?fixture=signature"
+        req=Request("https://registry-1.docker.io/v2/library/ubuntu/blobs/sha256:fixture",
+                    headers={"Authorization":"Bearer fixture"})
+        allowed=m.PublicRedirect(m.CDN)
+        result=allowed.redirect_request(req,None,307,"",{},documented)
+        self.assertIsNone(result.get_header("Authorization"))
+        for url in (documented.replace("https://","http://"),
+                    documented.replace(".com/",".com.invalid/"),
+                    documented.replace(".com/",".com:444/")):
+            with self.subTest(url=url),self.assertRaises(m.PublicIngressOriginError):
+                allowed.redirect_request(req,None,307,"",{},url)
+        with self.assertRaises(m.PublicIngressOriginError):
+            m.PublicRedirect({m.REGISTRY}).redirect_request(req,None,307,"",{},documented)
+
+    def test_materializer_reports_fixed_blob_pin_without_signed_url_or_token(self):
+        import json
+        pin=json.loads(m.PIN.read_bytes())
+        last=[]
+        secret="fixture-secret-token"
+        def registry(url, allowed, output=None, **kwargs):
+            if output is None:
+                self.assertEqual(allowed,{"auth.docker.io"})
+                return json.dumps({"token":secret}).encode()
+            last.append(url)
+            if "/manifests/" in url:
+                self.assertEqual(allowed,{m.REGISTRY})
+                return
+            self.assertEqual(allowed,m.CDN)
+            self.assertEqual(kwargs["digest"],pin["config"][7:])
+            self.assertEqual(kwargs["headers"]["Authorization"],"Bearer "+secret)
+            raise m.PublicIngressOriginError("https://not-approved.invalid/redirect?signature="+secret)
+        with TemporaryDirectory() as folder:
+            stage=Path(folder)
+            with self.assertRaises(m.PublicIngressOriginError) as caught:
+                m.materialize(stage,get=registry,
+                              stage_keyring=lambda *_:self.fail("unexpected later side effect"))
+            self.assertEqual(str(caught.exception),
+                             "Unapproved public ingress origin for Docker Hub config "+pin["config"])
+            self.assertTrue(caught.exception.__suppress_context__)
+            self.assertNotIn(secret,str(caught.exception))
+            self.assertNotIn("not-approved.invalid",str(caught.exception))
+            self.assertEqual(len(last),3)
+            self.assertFalse((stage/"native-libraries").exists())
