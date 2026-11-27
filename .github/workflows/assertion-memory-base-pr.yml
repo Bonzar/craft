@@ -107,5 +107,10 @@ jobs:
           python -m unittest prototypes.assertion_memory.tests.test_queue_sessions prototypes.assertion_memory.tests.test_queue_processing_policy prototypes.assertion_memory.tests.test_queue_item_removal prototypes.assertion_memory.tests.test_native_queue_carrier
           python -m unittest discover -s prototypes/assertion_memory/tests -p 'test_native_pause.py'
           node --test tools/assertion-memory-hosted-mcp/sites-pause/test-native-pause.mjs
+      - name: Verify optional Graph removal and device registry in isolated fixtures
+        run: |
+          export PYTHONPATH="$PWD:$PWD/tools/assertion-memory-hosted-mcp:$PWD/tools/assertion-memory-release"
+          python3 -B tools/assertion-memory-qa/test_optional_owner_features.py graph-node-removal
+          python3 -B tools/assertion-memory-qa/test_optional_owner_features.py device-registry
       - name: Build narrow, data-free release
         run: tools/assertion-memory-qa/build-release.sh "$RUNNER_TEMP/qa-release"
