@@ -16,7 +16,9 @@ SNAPSHOT = "https://snapshot.ubuntu.com/ubuntu/20261105T000000Z/"
 REGISTRY = "registry-1.docker.io"
 OCI_ACCEPT = ", ".join("application/vnd.oci.image." + x for x in
                        ("index.v1+json", "manifest.v1+json"))
-CDN = {REGISTRY, "production.cloudflare.docker.com",
+# Docker Hub's documented CloudFront CDN is allowed for pinned blob GETs only:
+# https://docs.docker.com/docker-hub/release-notes/#2026-05-20
+CDN = {REGISTRY, "production.cloudflare.docker.com", "production.cloudfront.docker.com",
        "docker-images-prod.6aa30f8b08e16409b46e0173d6de2f56.r2.cloudflarestorage.com"}
 GH_CDN = {"api.github.com", "release-assets.githubusercontent.com", "objects.githubusercontent.com"}
 
@@ -24,7 +26,11 @@ GH_CDN = {"api.github.com", "release-assets.githubusercontent.com", "objects.git
 def check_url(url, allowed):
     u = urlsplit(url)
     if u.scheme != "https" or u.netloc not in allowed or u.fragment:
-        raise ValueError("Unapproved public ingress origin")
+        raise PublicIngressOriginError("Unapproved public ingress origin")
+
+
+class PublicIngressOriginError(ValueError):
+    pass
 
 
 class PublicRedirect(HTTPRedirectHandler):
@@ -83,8 +89,15 @@ def materialize(root, *, get=fetch, stage_keyring):
     for key in ("index","manifest","config","layers"):
         for digest in pin[key] if key == "layers" else [pin[key]]:
             part = "manifests" if key in {"index","manifest"} else "blobs"
-            get(url+part+"/"+digest,CDN,oci/digest[7:],limit=128*1024**2,digest=digest[7:],
-                headers={"Accept":OCI_ACCEPT,"Authorization":"Bearer "+token})
+            try:
+                get(url+part+"/"+digest, CDN if part == "blobs" else {REGISTRY},
+                    oci/digest[7:], limit=128*1024**2, digest=digest[7:],
+                    headers={"Accept":OCI_ACCEPT,"Authorization":"Bearer "+token})
+            except PublicIngressOriginError:
+                # Safe diagnostic: only fixed semantic class and public pin.
+                # Do not log redirect destinations, signed query or bearer.
+                raise PublicIngressOriginError(
+                    f"Unapproved public ingress origin for Docker Hub {key} {digest}") from None
     verify(oci,pin)
     native = root/"native-libraries"
     native.mkdir()
