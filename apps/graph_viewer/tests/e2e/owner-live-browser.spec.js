@@ -110,7 +110,7 @@ test('authenticated warm cache then exact graph delta on one SSE, with no camera
     const release=page.locator('.visual-release-version');
     await expect(release).toHaveText('Визуал: assertion-memory-visual-v0.0.0-browser-fixture');
     await expect(release).toHaveCSS('position','fixed');
-    await expect(page.locator('#visual-queue-open')).toBeVisible();
+    await expect(page.locator('#visual-queue-open')).toBeHidden();
   }
   expect(await page.evaluate(()=>Boolean(document.createElement('canvas').getContext('webgl2'))),
     'Installed sandboxed browser must supply WebGL2').toBe(true);
@@ -124,6 +124,7 @@ test('authenticated warm cache then exact graph delta on one SSE, with no camera
     expect(requests.some(r=>/^\/visual\/assets\/index-[\w-]+\.css$/.test(r.path))).toBe(true);
     expect(requests.some(r=>/^\/visual\/assets\/graph\.worker-[\w-]+\.js$/.test(r.path))).toBe(true);
   }
+  if(packed)await expect(page.locator('#visual-queue-open')).toBeVisible();
   const cold=await pose();
   expect(eventReq()).toEqual([{path:'/api/v1/events',wire:'graph-v1',after:false,rev:false}]);
   expect(graphReq()).toEqual([]);
