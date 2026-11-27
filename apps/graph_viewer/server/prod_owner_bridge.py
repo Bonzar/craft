@@ -11,6 +11,7 @@ import stat
 import time
 
 from prototypes.assertion_memory import processing_control
+from prototypes.assertion_memory.database_clear import PATH as CLEAR, REARM_STATES, RESET_HEADER, RESET_FORMAT
 from prototypes.assertion_memory.queue_item_removal import PATH as REMOVE, PREVIEW_PATH
 from prototypes.assertion_memory.queue_pause_proof import ENVELOPE, HEX, PATH as PAUSE, TTL, ProvenOwner, canonical
 from prototypes.assertion_memory.queue_pause_rest import unique
@@ -25,6 +26,8 @@ _NODE_CONFLICTS={'dependency_proof_unavailable','dependent_thoughts','thought_wo
 
 
 _ROUTES = {
+    'clear_prepare': ('GET', CLEAR, frozenset()),
+    'clear_commit': ('PUT', CLEAR, frozenset()),
     'pause_prepare': ('GET', PAUSE, frozenset()),
     'pause_set': ('PUT', PAUSE, frozenset(('paused',))),
     'sessions_prepare': ('GET', SESSIONS, frozenset()),
@@ -54,6 +57,8 @@ class ProdOwnerBridge:
 
     def _request(self, method, path, token, *, body=None, proof=None, limit=64_000, timeout=4):
         headers={'Accept':'application/json','Authorization':'Bearer '+token,'Connection':'close'}
+        if path == CLEAR:
+            headers[RESET_HEADER.decode('ascii')]=RESET_FORMAT.decode('ascii')
         if body is not None:
             signed=hmac.new(self._secret,canonical(body,proof),sha256).hexdigest()
             headers.update(dict(zip((h.decode('ascii') for h in ENVELOPE),
@@ -110,10 +115,22 @@ class ProdOwnerBridge:
             raise ValueError('Oversized Base owner body')
         now=int(self._clock())
         proof=ProvenOwner(self._owner,revision,now,now+TTL,secrets.token_hex(16),'prod',path)
-        return self._check_state(path,self._request(method,path,self._write,body=body,proof=proof),args)
+        return self._check_state(path,self._request(method,path,self._write,body=body,proof=proof,timeout=17 if path==CLEAR else 4),args)
 
     @staticmethod
     def _check_state(path, value, args):
+        if path==CLEAR:
+            read=not args
+            expected=({'stage','revision','can_clear','scope','capture_rearm'} if read else
+                      {'stage','revision','cleared','capture_rearm'})
+            if (set(value)!=expected or not isinstance(value['revision'],str)
+                    or not processing_control.REVISION.fullmatch(value['revision'])
+                    or not isinstance(value['capture_rearm'],str) or value['capture_rearm'] not in REARM_STATES
+                    or (read and (type(value['can_clear']) is not bool
+                                  or type(value['scope']) is not str or not HEX.fullmatch(value['scope'])))
+                    or (not read and value['cleared'] is not True)):
+                raise APIError('queue_unavailable','Invalid private clear response',503)
+            return value
         expected={
             PAUSE:{'stage','revision','paused'},
             SESSIONS:{'stage','revision','selected_session_ids','sessions'},

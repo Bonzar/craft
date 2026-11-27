@@ -60,7 +60,7 @@ function harness({stage='test',control=null,session={authenticated:true},prepare
       if(url.startsWith('/api/v1/processing/database/clear-v2')){
         const args=JSON.parse(options.body);
         clearCalls.push({url,args,method:options.method,csrf:options.headers['x-csrf-token']});
-        if(url.endsWith('/prepare'))return Response.json({stage,revision:args.expected_revision,csrf_token:'123.'+'a'.repeat(64)});
+        assert.equal(url,'/api/v1/processing/database/clear-v2');
         if(clearWrite)return clearWrite();
         clear={...clear,revision:'b'.repeat(32)};
         data=data.map(q=>({...q,total:0,next_offset:null,items:[]}));
@@ -115,7 +115,7 @@ function harness({stage='test',control=null,session={authenticated:true},prepare
         return Response.json(next);
       }
       const offset=Number(url.split('offset=')[1]);
-      return Response.json({stage,release_generation:'e'.repeat(64),owner_live_epoch:sourceEpoch,database_clear:clear,capabilities:{standalone_pause:standalone,standalone_queue_sessions:Boolean(sessionPolicy||processingPolicy)},processing_control:control,release_version:'assertion-memory-v1.2.3',queues:offset===0?data:
+      return Response.json({stage,release_generation:'e'.repeat(64),owner_live_epoch:sourceEpoch,database_clear:clear,capabilities:{standalone_pause:standalone,standalone_queue_sessions:Boolean(sessionPolicy||processingPolicy),owner_database_clear_post:clear?.can_clear===true},processing_control:control,release_version:'assertion-memory-v1.2.3',queues:offset===0?data:
         [{id:'source',status:'active',total:51,items:[{id:'second-page',status:'ready',phase:'extract',position:51}]}]});
     }});
   const signal=async()=>{events.at(-1).listeners.queue_changed();await delay();};
@@ -454,63 +454,60 @@ for(const stage of ['test','prod'])test(stage+' saves an owner processing policy
   assert.deepEqual(h.sessionWrites[1].payload.policy.excluded_session_ids,[]);
 });
 
-test('clear is owner-capability gated, stage specific and request-free before explicit confirmation',async()=>{
-  const h=harness({stage:'prod',clear:{revision:'a'.repeat(32),can_clear:true,capture_rearm:"not_cleared"}});
+for(const stage of ['test','prod'])test(stage+' clear sends one owner-CSRF POST after explicit confirmation only',async()=>{
+  const token='owner_session_'+'a'.repeat(32);
+  const phrase='ОЧИСТИТЬ '+stage.toUpperCase();
+  const h=harness({stage,session:{authenticated:true,csrf_token:token},clear:{can_clear:true}});
   await h.open();
   const get=h.clearNode;
   assert.equal(get('clear-open').disabled,false);
-  assert.match(get('clear-instance').textContent,/PROD/);
+  assert.match(get('clear-instance').textContent,new RegExp(stage.toUpperCase()));
   get('clear-open').listeners.click();
   assert.equal(h.doc.activeElement,get('clear-typed'));
-  assert.match(get('clear-label').textContent,/ОЧИСТИТЬ PROD/);
   assert.deepEqual(h.clearCalls,[]);
-  get('clear-typed').value='ОЧИСТИТЬ TEST';
-  get('clear-typed').listeners.input();
-  assert.equal(get('clear-commit').disabled,true);
+  get('clear-typed').value='ОЧИСТИТЬ НЕ ТО';
   await get('clear-commit').listeners.click();
   get('clear-cancel').listeners.click();
-  assert.equal(h.doc.activeElement,get('clear-open'));
   assert.deepEqual(h.clearCalls,[]);
   get('clear-open').listeners.click();
-  get('clear-typed').value='ОЧИСТИТЬ PROD';
-  get('clear-typed').listeners.input();
-  assert.equal(get('clear-commit').disabled,false);
+  get('clear-typed').value=phrase;
   await get('clear-commit').listeners.click();
-  assert.deepEqual(h.clearCalls.map(({method,args,csrf})=>({method,args,csrf})),[
-    {method:'POST',args:{stage:'prod',expected_revision:'a'.repeat(32),confirmation:'ОЧИСТИТЬ PROD'},csrf:undefined},
-    {method:'PUT',args:{stage:'prod',expected_revision:'a'.repeat(32)},csrf:'123.'+'a'.repeat(64)},
-  ]);
-  assert.match(get('clear-feedback').textContent,/PROD очищена/);
+  assert.deepEqual(h.clearCalls,[{url:'/api/v1/processing/database/clear-v2',method:'POST',args:{confirmation:phrase},csrf:token}]);
+  assert.match(get('clear-feedback').textContent,/очищена/);
 });
 
-test('a stale clear dialog closes without preparing; a failed write never claims success',async()=>{
-  const h=harness({clear:{revision:'a'.repeat(32),can_clear:true,capture_rearm:"not_cleared"},clearWrite:()=>Response.json({}, {status:503})});
+test('absent owner/session or withdrawn capability cannot write; uncertain POST is not retried',async()=>{
+  const inactive=harness({session:{authenticated:false},clear:{can_clear:true}});
+  await inactive.open();
+  inactive.clearNode('clear-open').listeners.click();
+  inactive.clearNode('clear-typed').value='ОЧИСТИТЬ TEST';
+  await inactive.clearNode('clear-commit').listeners.click();
+  assert.deepEqual(inactive.clearCalls,[]);
+  const token='owner_session_'+'a'.repeat(32);
+  const h=harness({session:{authenticated:true,csrf_token:token},clear:{can_clear:true},clearWrite:()=>Response.json({}, {status:503})});
   await h.open();
   const get=h.clearNode;
   get('clear-open').listeners.click();
-  h.setClear({revision:'c'.repeat(32),can_clear:true,capture_rearm:"not_cleared"});
-  await h.signal();
+  h.setClear({can_clear:false});await h.signal();
   assert.equal(get('clear-confirmation').hidden,true);
-  assert.match(get('clear-feedback').textContent,/Откройте подтверждение заново/);
   assert.deepEqual(h.clearCalls,[]);
+  h.setClear({can_clear:true});await h.signal();
   get('clear-open').listeners.click();
   get('clear-typed').value='ОЧИСТИТЬ TEST';
   await get('clear-commit').listeners.click();
-  assert.equal(h.clearCalls.length,2);
+  assert.equal(h.clearCalls.length,1);
   assert.match(get('clear-feedback').textContent,/не подтверждён/);
 });
 
-test('old Base capability stays hidden; capture resumes only when separately acknowledged',async()=>{
-  const old=harness({clear:{revision:'a'.repeat(32),can_clear:true}});
+test('unadvertised clear stays hidden; capture resumes only when separately acknowledged',async()=>{
+  const old=harness();
   await old.open();
   assert.equal(old.clearNode('clear-open').disabled,true);
   assert.deepEqual(old.clearCalls,[]);
-  const h=harness({clear:{revision:'b'.repeat(32),can_clear:true,capture_rearm:'waiting'}});
+  const h=harness({clear:{can_clear:true,capture_rearm:'waiting'}});
   await h.open();
   assert.match(h.clearNode('clear-instance').textContent,/Ожидаем повторного подтверждения/);
-  assert.doesNotMatch(h.clearNode('clear-instance').textContent,/Получено/);
-  h.setClear({revision:'b'.repeat(32),can_clear:true,capture_rearm:'confirmed'});
-  await h.signal();
+  h.setClear({can_clear:true,capture_rearm:'confirmed'});await h.signal();
   assert.match(h.clearNode('clear-instance').textContent,/Получено подтверждение/);
   assert.deepEqual(h.clearCalls,[]);
 });

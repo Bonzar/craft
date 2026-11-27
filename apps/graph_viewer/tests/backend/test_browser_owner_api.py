@@ -170,6 +170,45 @@ class BrowserOwnerBoundaryTest(unittest.TestCase):
             self.assertEqual(db.execute('SELECT count(*) FROM memory_raw_events').fetchone()[0],1)
 
 
+    def test_ordinary_clear_is_one_post_with_owner_session_csrf_and_no_marker(self):
+        current=dict(release_version=IDENTITY[0],generation=IDENTITY[1],
+            auto_process_fresh_mac=False,processing_session_ids=[],model_configured=False,interactive_enabled=False)
+        dashboard=SimpleNamespace(stage='test',db=self.db,metadata=lambda:current,release_lease=nullcontext)
+        api=configured_browser_api(dashboard,ordinary_test_clear=True)
+        c=self.make(browser=api)
+        body={'confirmation':'ОЧИСТИТЬ TEST'}
+        self.assertEqual(c.post(CLEAR,headers=BROWSER,json=body).status_code,401)
+        csrf=self.login(c)
+        proof=BROWSER|{'X-CSRF-Token':csrf}
+        self.assertTrue(c.get('/api/v1/capabilities?queue_status=1').json()['capabilities']['owner_database_clear_post'])
+        self.assertEqual(c.post(CLEAR,headers=BROWSER,json=body).status_code,403)
+        self.assertEqual(c.post(CLEAR,headers=proof|{'Origin':'https://foreign.test'},json=body).status_code,403)
+        self.assertEqual(c.post(CLEAR,headers=proof,json={'confirmation':'ОЧИСТИТЬ PROD'}).status_code,400)
+        self.assertEqual(c.post(CLEAR+'/prepare',headers=proof,json=body).status_code,404)
+        self.assertEqual(c.put(CLEAR,headers=proof,json=body).status_code,404)
+        recorded=[]
+        perform=api.perform
+        def no_effect(action,args):
+            if action=='clear_prepare':
+                return {'revision':perform(action,args)['revision']}
+            if action=='clear_commit':
+                recorded.append(args)
+                return {'stage':'test','cleared':True,'revision':'f'*32,'capture_rearm':'not_required'}
+            return perform(action,args)
+        api.perform=no_effect
+        with patch.object(api,'graph_ready',side_effect=AssertionError('ordinary action or queue must not need Graph ready')):
+            self.assertTrue(c.get('/api/v1/capabilities?queue_status=1').json()['capabilities']['owner_database_clear_post'])
+            self.assertEqual(c.post(CLEAR,headers=proof,json=body).status_code,200)
+        self.assertEqual(len(recorded),1)
+        self.assertEqual(set(recorded[0]),{'expected_revision'})
+        old=recorded[0]['expected_revision']
+        current['generation']='d'*64
+        c2=self.make(browser=configured_browser_api(dashboard,ordinary_test_clear=True))
+        self.login(c2)
+        capability=c2.get('/api/v1/capabilities?queue_status=1').json()['capabilities']
+        self.assertTrue(capability['owner_database_clear_post'])
+        self.assertNotEqual(configured_browser_api(dashboard,ordinary_test_clear=True).perform('clear_prepare',{})['revision'],old)
+
     def test_canonical_test_clear_profile_is_explicit_and_one_epoch_only(self):
         witness=self.control('clear_prepare',{})
         current=dict(release_version=IDENTITY[0],generation=IDENTITY[1],

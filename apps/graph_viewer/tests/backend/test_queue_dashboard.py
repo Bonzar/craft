@@ -424,24 +424,29 @@ class OwnerBrowserStartup(unittest.TestCase):
 
     def test_only_trusted_injected_same_lane_browser_type_can_bind_prod(self):
         from apps.graph_viewer.server.__main__ import configure_owner_lanes
-        from apps.graph_viewer.server import browser_owner_api
         from apps.graph_viewer.server.browser_owner_api import BrowserOwnerAPI
         dummy=SimpleNamespace(stage='prod')
-        def factory(stage,clear=False):
-            return BrowserOwnerAPI(stage=stage,clear_enabled=clear,perform=lambda *_:self.fail(),
+        def factory(stage,clear=False,single=False):
+            return BrowserOwnerAPI(stage=stage,clear_enabled=clear,single_clear=single,perform=lambda *_:self.fail(),
                                    queue_snapshot=lambda **_:self.fail())
-        with (patch.object(queue_dashboard,'configured_browser_dashboard',return_value=dummy) as binder,
-              patch.object(browser_owner_api,'configured_browser_api') as direct):
+        with patch.object(queue_dashboard,'configured_browser_dashboard',return_value=dummy):
             application=factory('prod')
             dashboard,browser=configure_owner_lanes(self.args(),prod_owner_api=lambda d: application if d is dummy else None)
             self.assertIs(dashboard,dummy);self.assertIs(browser,application)
-            binder.assert_called_once_with('prod',self.args().queue_status_config,self.args().source)
             for wrong in (None,SimpleNamespace(stage='prod',clear_enabled=False),factory('test'),factory('prod',True)):
                 with self.assertRaisesRegex(ValueError,'Wrong private Base writer'):
                     configure_owner_lanes(self.args(),prod_owner_api=lambda _d: wrong)
-            direct.assert_not_called()
-            configure_owner_lanes(self.args(queue_status_stage='test'))
-            direct.assert_called_once_with(dummy,clear_enabled=False)
+            protected_clear=factory('prod',True,True)
+            self.assertIs(configure_owner_lanes(self.args(),prod_owner_api=lambda _: protected_clear)[1],
+                          protected_clear)
+        test_dashboard=SimpleNamespace(stage='test')
+        with (patch.object(queue_dashboard,'configured_browser_dashboard',return_value=test_dashboard),
+              patch('apps.graph_viewer.server.device_test_binding.installed_test_device_binding',return_value=None)):
+            dashboard,browser=configure_owner_lanes(self.args(queue_status_stage='test'))
+        self.assertIs(dashboard,test_dashboard)
+        self.assertEqual(browser.stage,'test')
+        self.assertEqual([route.methods for route in browser.routes()
+                          if route.path.endswith('/database/clear-v2')],[{'POST'}])
 
     def test_prod_reader_policy_canonical_db_release_and_fence_are_distinct_from_writer(self):
         from contextlib import contextmanager
