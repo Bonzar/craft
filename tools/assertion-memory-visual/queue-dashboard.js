@@ -588,20 +588,37 @@
     }
   });
   let directQueueEpoch=null,directQueueLive=false,transportUp=false,primedQueue=null,primeAbort=null;
+  let startupPending=typeof releaseFirstOwnerSnapshot==='function';
+  function startQueueFallback(){
+    if(startupPending||!panel.open||directQueueLive||stream||typeof EventSource==='undefined')return;
+    stream=new EventSource('/api/v1/events?channel=dashboard',{withCredentials:true});
+    const received=()=>{lastSignal=Date.now();void refresh();};
+    stream.addEventListener('resync',received);
+    stream.addEventListener('queue_changed',received);
+  }
+  addEventListener('owner-live-startup',()=>{
+    startupPending=true;fetchAbort?.abort();stream?.close();stream=null;
+    if(panel.open)status.textContent='Подключаемся к live-потоку…';
+  });
+  addEventListener('owner-live-offline',()=>{
+    startupPending=false;startQueueFallback();if(panel.open)void refresh();
+  });
   function resetDirectQueue(){
     directQueueEpoch=null;directQueueLive=false;primedQueue=null;primeAbort?.abort();primeAbort=null;
   }
   addEventListener('owner-live-connection',event=>{
-    transportUp=event.detail==='live';
+    transportUp=event.detail==='registered'||event.detail==='live';
     if(transportUp){directQueueLive=!!directQueueEpoch;if(directQueueLive){stream?.close();stream=null;}return;}
     directQueueLive=false;
     if(event.detail==='closed'){resetDirectQueue();fetchAbort?.abort();}
-    if(event.detail==='disconnected'){resetDirectQueue();if(panel.open)void refresh();}
+    if(event.detail==='disconnected'){resetDirectQueue();startQueueFallback();if(panel.open)void refresh();}
   });
   addEventListener('owner-live-invalidate',()=>{resetDirectQueue();fetchAbort?.abort();if(panel.open){rendered.clear();lanes.clear();container.replaceChildren();status.textContent='Подключаемся к новой версии базы…';}});
   addEventListener('owner-live-snapshot',event=>{
     const {epoch,queue}=event.detail??{};
-    if(queue!==true||typeof epoch!=='string'||!(/^[a-f0-9]{64}$/).test(epoch))return;
+    if(typeof epoch!=='string'||!(/^[a-f0-9]{64}$/).test(epoch))return;
+    startupPending=false;
+    if(queue!==true){startQueueFallback();if(panel.open)void refresh();return;}
     if(directQueueEpoch!==epoch){directQueueEpoch=epoch;primedQueue=null;primeAbort?.abort();}
     directQueueLive=transportUp;if(directQueueLive){stream?.close();stream=null;}
     if(panel.open){void refresh();return;}
@@ -620,7 +637,7 @@
     return data;
   }
   async function refresh(){
-    if(!panel.open)return;
+    if(!panel.open||startupPending)return;
     if(loading){dirty=true;return;}
     loading=true;
     const current=generation, requested=new Map(offsets), epoch=controlEpoch, sourceEpoch=directQueueEpoch;
@@ -675,12 +692,7 @@
     if(sessionsPanel){sessionsPanel.hidden=true;sessionsPanel.open=false;sessionFeedback.textContent='';}
     status.textContent='Подключаемся…';lastSignal=0;
     control=null;ownerReady=false;ownerCheck=null;nativeReady=false;probedRevision=null;controlFeedback.textContent='';drawControl();
-    if(!directQueueLive&&typeof EventSource!=='undefined'){
-      stream=new EventSource('/api/v1/events?channel=dashboard',{withCredentials:true});
-      const received=()=>{lastSignal=Date.now();void refresh();};
-      stream.addEventListener('resync',received);
-      stream.addEventListener('queue_changed',received);
-    }
+    startQueueFallback();
     timer=setInterval(()=>{if(!directQueueLive&&Date.now()-lastSignal>2500)void refresh();},3000);
     void refresh();
   });

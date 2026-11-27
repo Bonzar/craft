@@ -4,6 +4,7 @@ export function openOwnerLive(args:{
   transport?:'direct'|'ordinary';
   csrf:string;
   initialEpoch?:string|null;
+  onStartupFailure?:(()=>void|Promise<void>)|null;
   onBootstrap?:(epoch:string)=>boolean;
   onInvalidate?:(retiredEpoch:string|null)=>void;
   onState:(state:'connecting'|'registered'|'live'|'disconnected')=>void;

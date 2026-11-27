@@ -4,19 +4,36 @@ const MIN_LIVE_GAP=500;
 const SILENCE_TIMEOUT=18_000;
 const FIRST_HEARTBEAT_TIMEOUT=12_000;
 const MAX_BACKOFF=20_000;
+const STARTUP_TIMEOUT=10_000;
 
 // A transport lifetime can refresh the same Graph slice without reminting.
 // Starting a new slice/session closes the old transport first.
 export function openOwnerLive({
   allowedOrigin,csrf,onState,onRefresh,onInvalidate=()=>{},initialEpoch=null,onBootstrap=()=>false,transport='direct',read=transport==='ordinary'?readSameOriginOwnerStream:readDirectStream,
+  onStartupFailure=null,startupWaitMs=STARTUP_TIMEOUT,
   visibility=globalThis.document,page=globalThis.window,
   now=()=>performance.now(),schedule=setTimeout,cancel=clearTimeout,
 }){
   let closed=false, connection=null,watchdog=null,retry=null,resume=null,failures=0;
   let refreshing=false,pending=null,pendingEpoch=null,epoch=initialEpoch;
   let hidden=visibility?.visibilityState==='hidden';
+  let startupPending=onStartupFailure!==null,startupTimer=null,recovering=false;
+  function finishStartup(){startupPending=false;cancel(startupTimer);startupTimer=null;}
+  function failStartup(retryAllowed=true){
+    if(!startupPending||closed)return;
+    finishStartup();recovering=true;epoch=null;
+    const expired=connection;connection=null;
+    cancel(watchdog);watchdog=null;cancel(retry);retry=null;cancel(resume);resume=null;
+    expired?.abort();
+    // Keep the offline snapshot visible while a new connection is negotiated.
+    // Its attempt is independent and may not race the original snapshot.
+    void Promise.resolve().then(()=>closed?undefined:onStartupFailure()).catch(()=>{}).then(()=>{
+      if(closed)return;
+      if(retryAllowed)scheduleRetry();else close();
+    });
+  }
   function foreground(){
-    if(closed||resume!==null||visibility?.visibilityState==='hidden')return;
+    if(closed||startupPending||recovering||resume!==null||visibility?.visibilityState==='hidden')return;
     resume=schedule(()=>{resume=null;if(!closed&&visibility?.visibilityState!=='hidden')refresh('changed');},0);
   }
   function visibilityChanged(){
@@ -27,6 +44,7 @@ export function openOwnerLive({
   visibility?.addEventListener('visibilitychange',visibilityChanged);
   page?.addEventListener('pageshow',pageShown);
   function refresh(kind,retiredEpoch=null){
+    if(startupPending||recovering||closed)return;
     // Hard reset hides old epoch synchronously, even if catch-up is in flight.
     if(kind==='reset'&&pending!=='reset')onInvalidate(retiredEpoch);
     pending=pending==='reset'||kind==='reset'?'reset':'changed';pendingEpoch=epoch;
@@ -44,13 +62,17 @@ export function openOwnerLive({
       }finally{refreshing=false;}
     })();
   }
+  function scheduleRetry(){
+    const delay=Math.min(1000*2**Math.min(failures++,5),MAX_BACKOFF);
+    retry=schedule(connect,delay);
+  }
   function connect(){
     if(closed)return;
     retry=null;
     const attempt=new AbortController();
     connection=attempt;
-    let hello=null,ready=false,firstReset=true,retiredEpoch=null;
-    onState('connecting');
+    let hello=null,helloEpoch=null,ready=false,firstReset=true,retiredEpoch=null,recoveryReset=false;
+    if(!recovering)onState('connecting');
     const arm=(timeout=SILENCE_TIMEOUT)=>{
       cancel(watchdog);
       watchdog=schedule(()=>attempt.abort(),timeout);
@@ -61,72 +83,81 @@ export function openOwnerLive({
         await read({allowedOrigin,csrf,signal:attempt.signal,onEvent(kind,ticketEpoch){
           if(closed||connection!==attempt||attempt.signal.aborted)return;
           if(kind==='hello'){
-            hello=now();
+            hello=now();helloEpoch=ticketEpoch??null;
             if(ticketEpoch){
               retiredEpoch=epoch!==null&&epoch!==ticketEpoch?epoch:null;
               epoch=ticketEpoch;
             }
           }else if(kind==='heartbeat'){
-            if(hello!==null&&now()-hello>=MIN_LIVE_GAP){
+            if(!firstReset&&!startupPending&&hello!==null&&now()-hello>=MIN_LIVE_GAP&&(!recovering||recoveryReset)){
               arm();
               if(!ready){
-                ready=true; failures=0; onState('live');
+                ready=true;failures=0;
+                if(recovering){recovering=false;onState('live');refresh(retiredEpoch?'reset':'changed',retiredEpoch);}
+                else onState('live');
               }
             }
           }else if(kind==='reset'){
             // First reset is a catch-up hint, not a database clear. Every later
             // reset on this protocol is a hard epoch transition and closes it.
-            if(firstReset){
-              const accepted=!retiredEpoch&&epoch&&onBootstrap(epoch)===true;
+            if(firstReset&&recovering){
+              recoveryReset=hello!==null&&typeof helloEpoch==='string'&&/^[a-f0-9]{64}$/.test(helloEpoch);
+              if(recoveryReset)arm(FIRST_HEARTBEAT_TIMEOUT);
+            }else if(firstReset){
+              const accepted=!retiredEpoch&&epoch&&(!startupPending||helloEpoch===epoch)&&onBootstrap(epoch)===true;
               // The exact epoch-bound initial handshake is registration. This
               // runs before the snapshot loader microtask; heartbeat measures
               // continued freshness rather than delaying the first live badge.
-              if(accepted){onState('registered');arm(FIRST_HEARTBEAT_TIMEOUT);}
+              if(accepted){finishStartup();onState('registered');arm(FIRST_HEARTBEAT_TIMEOUT);}
               else refresh(retiredEpoch?'reset':'changed',retiredEpoch);
             }
-            else{epoch=null;refresh('reset',ticketEpoch);}
+            else{epoch=null;if(recovering){recoveryReset=false;attempt.abort();}else refresh('reset',ticketEpoch);}
             firstReset=false;
           }else if(kind==='changed'){
             refresh(kind);
           }
         }});
-      }catch{
+      }catch(error){
+        if(error?.name==='OwnerStreamTerminalError'){
+          if(startupPending)failStartup(error.authorizationDenied!==true);
+          else if(recovering&&error.authorizationDenied===true)close();
+        }
         // Do not retain ticket, server response, or error details.
       }finally{
         if(connection===attempt){
           cancel(watchdog);watchdog=null;connection=null;
           if(!closed){
-            onState('disconnected');
-            const delay=Math.min(1000*2**Math.min(failures++,5),MAX_BACKOFF);
-            retry=schedule(connect,delay);
+            if(!startupPending&&!recovering)onState('disconnected');
+            scheduleRetry();
           }
         }
       }
     })();
   }
-  connect();
-  return {close(){
+  function close(){
     if(closed)return;
     closed=true;
     visibility?.removeEventListener('visibilitychange',visibilityChanged);
     page?.removeEventListener('pageshow',pageShown);
-    cancel(watchdog);cancel(retry);cancel(resume);
+    finishStartup();cancel(watchdog);cancel(retry);cancel(resume);
     connection?.abort();pending=null;
-  }};
+  }
+  if(startupPending)startupTimer=schedule(()=>failStartup(),startupWaitMs);
+  connect();
+  return {close};
 }
 
 // First protected catch-up wins over fallback. Both routes use one snapshot
 // loader; a late lease cannot start another render in the same bootstrap.
-export function firstOwnerSnapshot(load,{waitMs=1500,schedule=setTimeout,cancel=clearTimeout}={}){
-  let used=false,timer,resolve,reject;
+export function firstOwnerSnapshot(load){
+  let used=false,resolve,reject;
   const ready=new Promise((yes,no)=>{resolve=yes;reject=no});
   const run=epoch=>{
     if(used)return false;
-    used=true;cancel(timer);
+    used=true;
     Promise.resolve().then(()=>load(epoch)).then(resolve,reject);
     return true;
   };
-  timer=schedule(()=>run(null),waitMs);
   return {ready,accept:epoch=>typeof epoch==='string'&&/^[a-f0-9]{64}$/.test(epoch)&&run(epoch),
-    fallback:()=>run(null),close(){if(!used){used=true;cancel(timer);resolve();}}};
+    fallback:()=>run(null),close(){if(!used){used=true;resolve();}}};
 }
