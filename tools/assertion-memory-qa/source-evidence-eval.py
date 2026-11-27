@@ -71,7 +71,7 @@ CONTROLS=("direct_user_decision","typed_tool_result","unsupported_assistant_repo
 QA_DIR=Path(__file__).resolve().parent
 
 
-def isolated_once(sources,case):
+def isolated_once(sources,case,private_receipt_check=False):
  with tempfile.TemporaryDirectory(prefix='qa-038-standalone-c-',dir='/tmp') as work:
   root=Path(work)
   for n,body in sources.items():
@@ -81,9 +81,11 @@ def isolated_once(sources,case):
   job=root/'synthetic_case.py'
   shutil.copyfile(QA_DIR/'source-evidence-worker.py',job)
   shutil.copyfile(QA_DIR/'source-evidence-fixtures.json',root/'source-evidence-fixtures.json')
+  if private_receipt_check:
+   shutil.copyfile(QA_DIR/'source-evidence-receipt.py',root/'source_evidence_receipt.py')
   proc=subprocess.run([sys.executable,'-I','-B','-c',
              "import runpy,sys; sys.path.insert(0,sys.argv[1]); sys.argv=sys.argv[2:]; runpy.run_path(sys.argv[0],run_name='__main__')",
-             work,str(job),case],cwd=root,
+             work,str(job),case,*(['--private-receipt-check'] if private_receipt_check else [])],cwd=root,
              env={k:v for k,v in os.environ.items() if k not in ('PYTHONPATH','PYTHONHOME')},
              capture_output=True,timeout=300)
   if proc.returncode:
@@ -99,9 +101,12 @@ def main():
  p.add_argument('--variant',choices=('stock','standalone_C'))
  p.add_argument('--case',choices=CONTROLS)
  p.add_argument('--run-one',action='store_true')
+ p.add_argument('--private-receipt-check',action='store_true',help='Validate exact stage binding for two frozen fictional cases, with no raw output')
  opts=p.parse_args()
  if opts.run_one!=(bool(opts.variant) and bool(opts.case)) or bool(opts.variant)!=bool(opts.case):
     p.error('preflight has no case/variant; run-one requires one variant and one case')
+ if opts.private_receipt_check and (not opts.run_one or opts.case not in ('typed_tool_result','frozen_rowan')):
+    p.error('private evidence is restricted to one explicitly selected frozen case')
  a,b=git_sources(opts.git_root)
  changed=[n for n in a if a[n]!=b[n]]
  if changed!=[DIALOGUE]:raise ValueError('not a standalone prompt delta')
@@ -115,7 +120,7 @@ def main():
   print(json.dumps({**proof,'outcome':'preflight_only','model_calls':0,'cases':CONTROLS}))
   return 0
  which=a if opts.variant=='stock' else b
- result=isolated_once(which,opts.case)
+ result=isolated_once(which,opts.case,opts.private_receipt_check)
  print(json.dumps({**proof,'variant':opts.variant ,'provider':'configured-native-codex',**result}))
  return 0 if result['outcome']=='pass' else 2
 
