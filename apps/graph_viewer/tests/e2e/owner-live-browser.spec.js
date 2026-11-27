@@ -65,9 +65,46 @@ test('authenticated warm cache then exact graph delta on one SSE, with no camera
     const fetchOriginal=window.fetch;
     window.__fixtureDocument=crypto.randomUUID();
     window.__fixtureFrames=[];
+    window.__fixtureCache={reads:0,deletions:0,lastGotValue:false,lastGotView:false,sessionAuthenticated:false,
+      sessionScopeShape:false,sessionEpochShape:false,authMatchesStored:false};
+    let storedScope,storedEpoch,sessionScope,sessionEpoch;
+    function recordMatch(){
+      if(!storedScope||!sessionScope||!storedEpoch||!sessionEpoch)return;
+      const [format,origin,owner]=JSON.parse(storedScope);
+      window.__fixtureCache.authMatchesStored=format===1&&origin===location.origin&&owner===sessionScope&&storedEpoch===sessionEpoch;
+    }
+    const get=IDBObjectStore.prototype.get;
+    IDBObjectStore.prototype.get=function(key){
+      const result=get.apply(this,arguments);
+      if(this.transaction.db.name==='private-owner-graph-topology-v1'&&this.name==='checkpoint'&&key==='latest'){
+        window.__fixtureCache.reads++;
+        result.addEventListener('success',()=>{
+          const item=result.result;
+          window.__fixtureCache.lastGotValue=Boolean(item);
+          window.__fixtureCache.lastGotView=Boolean(item?.value?.view);
+          storedScope=item?.scope;storedEpoch=item?.value?.epoch;
+          recordMatch();
+        });
+      }
+      return result;
+    };
+    const remove=IDBObjectStore.prototype.delete;
+    IDBObjectStore.prototype.delete=function(key){
+      if(this.transaction.db.name==='private-owner-graph-topology-v1'&&this.name==='checkpoint'&&key==='latest')window.__fixtureCache.deletions++;
+      return remove.apply(this,arguments);
+    };
     window.fetch=function(input,...args){
       const url=new URL(input instanceof Request?input.url:input,location.href);
       const answer=fetchOriginal.call(this,input,...args);
+      if(url.origin===location.origin&&url.pathname==='/api/v1/session'&&(args[0]?.method??'GET')==='GET'){
+        void answer.then(r=>r.clone().json()).then(result=>{
+          window.__fixtureCache.sessionAuthenticated=result.authenticated===true;
+          sessionScope=result.graph_cache_scope;sessionEpoch=result.graph_cache_epoch;
+          window.__fixtureCache.sessionScopeShape=/^[a-f0-9]{64}$/.test(sessionScope);
+          window.__fixtureCache.sessionEpochShape=/^[a-f0-9]{64}$/.test(sessionEpoch);
+          recordMatch();
+        }).catch(()=>{});
+      }
       if(url.origin!==location.origin||url.pathname!=='/api/v1/events'||url.searchParams.get('wire')!=='graph-v1'
           ||window.name!=='hold-qa-warm')return answer;
       return Promise.all([answer,new Promise(resolve=>{window.__fixtureRelease=resolve;})]).then(([response])=>{
@@ -146,7 +183,11 @@ test('authenticated warm cache then exact graph delta on one SSE, with no camera
   requests.length=0;
   await page.reload();
   await page.waitForFunction(()=>typeof window.__fixtureRelease==='function',null,{timeout:10000});
-  expect(eventReq()).toEqual([{path:'/api/v1/events',wire:'graph-v1',after:true,rev:true}]);
+  const resumeAttempt=eventReq();
+  if(packed&&resumeAttempt[0]?.after!==true){
+    console.info('Packed warm checkpoint diagnostic '+JSON.stringify(await page.evaluate(()=>window.__fixtureCache)));
+  }
+  expect(resumeAttempt).toEqual([{path:'/api/v1/events',wire:'graph-v1',after:true,rev:true}]);
   await expect(status).toHaveText('Снимок · подключаемся к Live');
   await waitGraph();
   const warm=await pose();
