@@ -72,7 +72,7 @@ smoke)
   cd "$release"
   for attempt in 1 2 3 4 5; do
     if "$canonical"; then
-      if "$release/venv/bin/python" -B /etc/assertion-release/test/test-health.py smoke-mcp "$state" &&
+      if "$release/venv/bin/python" -B /etc/assertion-release/test/test-health.py smoke "$state" &&
            /usr/bin/python3 -I -B "$gate" smoke "$release"; then exit 0; fi
     elif "$release/venv/bin/python" -B /etc/assertion-release/test/test-health.py smoke "$state"; then exit 0
     fi
