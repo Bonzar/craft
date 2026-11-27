@@ -5,7 +5,7 @@ import {readFile} from 'node:fs/promises';
 import {runInNewContext} from 'node:vm';
 const script=await readFile(new URL('./queue-dashboard.js',import.meta.url),'utf8');
 
-function harness({stage='test',control=null,session={authenticated:true},prepare,put,standalone=false,sessionPolicy=null,processingPolicy=null,observe=false,clear=null,clearWrite,sourceEpoch,startupPacked=false}={}){
+function harness({stage='test',control=null,session={authenticated:true},prepare,put,standalone=false,sessionPolicy=null,processingPolicy=null,observe=false,clear=null,clearWrite,legacyClearToken,sourceEpoch,startupPacked=false}={}){
   class Element {
     constructor(tag=''){this.tag=tag;this.items=[];this.listeners={};this.open=false;this.dataset={};}
     addEventListener(name,fn){this.listeners[name]=fn;}
@@ -115,11 +115,11 @@ function harness({stage='test',control=null,session={authenticated:true},prepare
         return Response.json(next);
       }
       const offset=Number(url.split('offset=')[1]);
-      return Response.json({stage,release_generation:'e'.repeat(64),owner_live_epoch:sourceEpoch,database_clear:clear,capabilities:{standalone_pause:standalone,standalone_queue_sessions:Boolean(sessionPolicy||processingPolicy),owner_database_clear_post:clear?.can_clear===true},processing_control:control,release_version:'assertion-memory-v1.2.3',queues:offset===0?data:
+      return Response.json({stage,release_generation:'e'.repeat(64),owner_live_epoch:sourceEpoch,database_clear:clear,...(legacyClearToken===undefined?{}:{owner_database_clear_csrf:legacyClearToken}),capabilities:{standalone_pause:standalone,standalone_queue_sessions:Boolean(sessionPolicy||processingPolicy),owner_database_clear_post:clear?.can_clear===true},processing_control:control,release_version:'assertion-memory-v1.2.3',queues:offset===0?data:
         [{id:'source',status:'active',total:51,items:[{id:'second-page',status:'ready',phase:'extract',position:51}]}]});
     }});
   const signal=async()=>{events.at(-1).listeners.queue_changed();await delay();};
-  return {clearNode:k=>clearDom['#queue-'+k],clearCalls,setClear:x=>{clear=x;},doc, panel, status, container, launcher, closer, copyStatus, writes, events, urls, text, find, longId,
+  return {clearNode:k=>clearDom['#queue-'+k],clearCalls,setClear:x=>{clear=x;},setLegacyClearToken:x=>{legacyClearToken=x;},doc, panel, status, container, launcher, closer, copyStatus, writes, events, urls, text, find, longId,
     controlPanel,controlButton,controlState,controlFeedback,mutations,sessionPanel,sessionOptions,sessionFeedback,sessionSave,sessionWrites,itemFeedback,removed,intersect:()=>observed([...targets].map(target=>({target,isIntersecting:true}))),timer:()=>scheduled,async ownerEvent(name,detail){windowHandlers['owner-live-'+name]({detail});await delay();},setData:x=>{data=x;},signal,async open(){launcher.listeners.click();await delay();},delay};
 }
 
@@ -474,6 +474,37 @@ for(const stage of ['test','prod'])test(stage+' clear sends one owner-CSRF POST 
   await get('clear-commit').listeners.click();
   assert.deepEqual(h.clearCalls,[{url:'/api/v1/processing/database/clear-v2',method:'POST',args:{confirmation:phrase},csrf:token}]);
   assert.match(get('clear-feedback').textContent,/очищена/);
+});
+
+test('legacy PROD owner queue authorizes one protected PUT without relying on bare Graph session',async()=>{
+  const token='123.'+'a'.repeat(64), refreshed='124.'+'b'.repeat(64);
+  const h=harness({stage:'prod',session:{authenticated:true},clear:{can_clear:true},legacyClearToken:token});
+  await h.open();
+  const get=h.clearNode;
+  get('clear-open').listeners.click();
+  h.setLegacyClearToken(refreshed);
+  await h.signal();
+  get('clear-typed').value='ОЧИСТИТЬ PROD';
+  await get('clear-commit').listeners.click();
+  assert.deepEqual(h.clearCalls,[{url:'/api/v1/processing/database/clear-v2',method:'PUT',
+    args:{confirmation:'ОЧИСТИТЬ PROD'},csrf:refreshed}]);
+  assert.ok(!h.urls.includes('/api/v1/session'));
+});
+
+test('legacy queue ticket without exact PROD owner clear capability never authorizes a write',async()=>{
+  for(const [stage,clear,legacyClearToken] of [
+    ['test',{can_clear:true},'123.'+'a'.repeat(64)],
+    ['prod',{can_clear:true},'wrong token'],
+    ['prod',{can_clear:false},'123.'+'a'.repeat(64)],
+  ]){
+    const h=harness({stage,clear,legacyClearToken});
+    await h.open();
+    const get=h.clearNode;
+    assert.equal(get('clear-open').disabled,true);
+    get('clear-open').listeners.click();
+    await get('clear-commit').listeners.click();
+    assert.deepEqual(h.clearCalls,[]);
+  }
 });
 
 test('absent owner/session or withdrawn capability cannot write; uncertain POST is not retried',async()=>{
