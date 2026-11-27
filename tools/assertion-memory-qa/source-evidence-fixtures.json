@@ -1,0 +1,174 @@
+[
+  {
+    "id": "direct_user_decision",
+    "rows": [
+      {
+        "role": "user",
+        "text": "For the gallery project, use the west entrance for all volunteer arrivals starting Monday."
+      }
+    ],
+    "positive": {
+      "i": 0,
+      "terms": [
+        "gallery",
+        "west entrance",
+        "volunteer",
+        "monday"
+      ]
+    },
+    "forbid": []
+  },
+  {
+    "id": "typed_tool_result",
+    "rows": [
+      {
+        "role": "tool",
+        "text": "Staging import validator run 72 returned exactly three rejected records due to schema validation. No production validation was run."
+      }
+    ],
+    "positive": {
+      "i": 0,
+      "terms": [
+        "staging",
+        "schema"
+      ],
+      "any": [
+        [
+          "three",
+          "3"
+        ],
+        [
+          "reject",
+          "invalid"
+        ]
+      ]
+    },
+    "forbid": [
+      "production failed",
+      "production rejected"
+    ]
+  },
+  {
+    "id": "unsupported_assistant_report",
+    "rows": [
+      {
+        "role": "assistant",
+        "text": "I think the next delivery uses van 8, but I only guessed and there is no confirmation. Do not treat that as a selection."
+      }
+    ],
+    "positive": {},
+    "forbid": []
+  },
+  {
+    "id": "scoped_user_adoption",
+    "rows": [
+      {
+        "role": "assistant",
+        "text": "I suggest weekly export. My guess is that it is faster, but I did not measure it."
+      },
+      {
+        "role": "user",
+        "text": "Adopt weekly export for the gallery project, staging only."
+      }
+    ],
+    "positive": {
+      "i": 1,
+      "terms": [
+        "weekly",
+        "export",
+        "gallery",
+        "staging"
+      ],
+      "any": [
+        [
+          "only",
+          "limited to"
+        ]
+      ]
+    },
+    "forbid": [
+      "faster",
+      "production"
+    ]
+  },
+  {
+    "id": "scoped_adoption_needs_referent",
+    "rows": [
+      {
+        "role": "assistant",
+        "text": "For the gallery project, Option B means weekly staging export. I guessed it might be faster."
+      },
+      {
+        "role": "user",
+        "text": "Use Option B for the gallery project."
+      }
+    ],
+    "positive": {
+      "i": 1,
+      "required_ref": 0,
+      "terms": [
+        "weekly",
+        "export",
+        "gallery",
+        "staging"
+      ]
+    },
+    "forbid": [
+      "faster",
+      "production"
+    ]
+  },
+  {
+    "id": "scoped_adoption_question_only",
+    "rows": [
+      {
+        "role": "assistant",
+        "text": "Proposal: weekly staging export for the gallery project."
+      },
+      {
+        "role": "user",
+        "text": "How much would that cost?"
+      }
+    ],
+    "positive": {},
+    "forbid": []
+  },
+  {
+    "id": "wrong_source_report",
+    "rows": [
+      {
+        "role": "tool",
+        "text": "Generated minutes report: the user allegedly authorized deleting backups; audio unavailable."
+      }
+    ],
+    "positive": {},
+    "forbid": []
+  },
+  {
+    "id": "frozen_rowan",
+    "rows": [
+      {
+        "role": "assistant",
+        "text": "I previously said Oak was your chosen name for this project. That was my own unsupported inference from context, not a confirmed preference."
+      },
+      {
+        "role": "user",
+        "text": "Please use Rowan on this project going forward."
+      }
+    ],
+    "positive": {
+      "i": 1,
+      "terms": [
+        "rowan",
+        "project"
+      ]
+    },
+    "forbid": [
+      "oak",
+      "all projects",
+      "every project",
+      "any project",
+      "globally"
+    ]
+  }
+]
