@@ -10,6 +10,7 @@ from time import monotonic
 from . import genai_traces
 
 _CONTEXT = ContextVar('query_timing', default={})
+_TRANSPORT = ContextVar('query_transport_trace', default=None)
 _ID = re.compile(r'(?:[0-9a-f]{32}|[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})\Z')
 STAGES = frozenset(('submission', 'ready_probe', 'queue_wait', 'job_total', 'result_persist',
     'query_total', 'release_lease', 'service_setup', 'snapshot', 'search', 'raw_search',
@@ -18,7 +19,12 @@ STAGES = frozenset(('submission', 'ready_probe', 'queue_wait', 'job_total', 'res
     'provider_decode', 'provider_retry_signal', 'trace_request_write', 'trace_response_write',
     'navigation', 'draft_generation', 'readiness_check', 'answer_verification', 'other_model',
     'gap_search', 'answer_neighborhood', 'model_contract_validation', 'query_outcome',
-    'vm_http_submission'))
+    'vm_http_submission', 'query_response_wait', 'answer_persist', 'answer_check_write',
+    'model_step_replay', 'ready_result_persist'))
+# Journal-only measurements gain one OTLP record here. Ordinary timing.span
+# already exports independently; do not add its stages to this set.
+_MEASURED = frozenset(('submission', 'ready_probe', 'queue_wait', 'result_persist',
+    'query_response_wait', 'model_step_replay', 'ready_result_persist', 'vm_http_submission'))
 _STATUSES = frozenset(('start', 'ok', 'failed', 'timeout', 'interrupted', 'partial', 'ready',
     'queued', 'reused', 'miss', 'unavailable', 'connection_signal', 'retry_signal'))
 _MODEL_STAGES = {'Navigate thought graph': 'navigation', 'Construct thought': 'draft_generation',
@@ -45,6 +51,23 @@ def bind(*, trace_id=None, run_id=None, call_id=None, model_phase=None):
         _CONTEXT.reset(token)
 
 
+@contextmanager
+def transport_trace():
+    """An internal request-local receipt for the relay, never in tool output."""
+    capture = []
+    token = _TRANSPORT.set(capture)
+    try:
+        yield capture
+    finally:
+        _TRANSPORT.reset(token)
+
+
+def capture_transport_trace(trace_id):
+    capture = _TRANSPORT.get()
+    if capture is not None and not capture and isinstance(trace_id, str) and _ID.fullmatch(trace_id):
+        capture.append(trace_id)
+
+
 def active():
     return 'trace_id' in _CONTEXT.get()
 
@@ -65,6 +88,9 @@ def emit(stage, status, duration_ms=None, *, signal_count=None):
         genai_traces.outcome(status)
     elif stage == 'provider_retry_signal':
         genai_traces.provider_signal(status, signal_count)
+    if stage in _MEASURED:
+        genai_traces.measured(stage, context, status, duration_ms,
+                              retry_count=signal_count if stage == 'result_persist' else None)
     event = {'event': 'memory_query_timing', 'schema_version': 1, **context, 'stage': stage, 'status': status}
     if type(duration_ms) is int and 0 <= duration_ms < 2**53:
         event['duration_ms'] = duration_ms
@@ -79,7 +105,8 @@ def emit(stage, status, duration_ms=None, *, signal_count=None):
 
 
 def begin_otel(stage, *, queue_wait_ms=None):
-    return genai_traces.begin(stage, _CONTEXT.get(), queue_wait_ms=queue_wait_ms)
+    return genai_traces.begin(stage, _CONTEXT.get(), queue_wait_ms=queue_wait_ms,
+                              backdate_ms=queue_wait_ms or 0)
 
 
 @contextmanager

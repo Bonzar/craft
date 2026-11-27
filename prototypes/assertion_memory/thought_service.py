@@ -192,8 +192,10 @@ class ThoughtService(MemoryService):
         with timing.bind(run_id=trace.id):
             with timing.span('usage_accounting'):
                 result['request_usage']=_request_usage(self.store.path,usage_id,round((time.monotonic()-started)*1000))
+            error = result.get('answer_error')
             timing.emit('query_outcome', 'partial' if result.get('partial_answer') else
-                        'failed' if result.get('answer_error') else 'ok' if result.get('answer_accepted') else 'miss')
+                        'unavailable' if isinstance(error, dict) and error.get('code') == 'model_provider_unavailable' else
+                        'failed' if error else 'ok' if result.get('answer_accepted') else 'miss')
             from .thought_status import query_diagnostics
             return query_diagnostics(self,result,scope)
 
