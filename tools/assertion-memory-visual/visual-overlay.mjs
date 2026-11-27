@@ -57,7 +57,9 @@ bootstrapReleaseOwnerGraph(){
     this.ensureReleaseScene();
     return this.loadGraph(undefined,true);
   });
-  if(!this.startReleaseOwnerLive(boot))boot.fallback();
+  // A validated ordinary snapshot renders first. Its completion starts Live.
+  this.stopReleaseOwnerLive();
+  boot.fallback();
   return boot.ready;
 }
 stopReleaseOwnerLive(){this.releaseOwnerSnapshotBoot?.close();this.releaseOwnerSnapshotBoot=null;this.releaseOwnerSnapshotEpoch=null;this.releaseOwnerLiveHealthy=false;this.releaseOwnerLiveCarriesQueue=false;if(this.releaseOwnerLive)globalThis.dispatchEvent?.(new CustomEvent('owner-live-connection',{detail:'closed'}));this.releaseOwnerLive?.close();this.releaseOwnerLive=null;this.releaseOwnerLiveKey=null;}

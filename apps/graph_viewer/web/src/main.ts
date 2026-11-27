@@ -389,7 +389,9 @@ class Viewer {
       this.ensureLiveScene();
       return this.loadGraph(undefined,true);
     });
-    if(!this.startDirectOwnerLive(bootstrap))bootstrap.fallback();
+    // A validated ordinary snapshot renders first. Its completion starts Live.
+    this.stopOwnerLive();
+    bootstrap.fallback();
     await bootstrap.ready;
   }
   private startDirectOwnerLive(bootstrap?:FirstOwnerSnapshot):boolean{
