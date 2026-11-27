@@ -25,7 +25,7 @@ test('authenticated warm cache then exact graph delta on one SSE, with no camera
       const url=new URL(input instanceof Request?input.url:input,location.href);
       const answer=fetchOriginal.call(this,input,...args);
       if(url.origin===location.origin&&url.pathname==='/api/v1/session'&&window.name==='hold-qa-warm'){
-        return answer.then(async response=>{
+        void answer.then(async response=>{
           const state=await response.clone().json();
           const expected=JSON.parse(sessionStorage.getItem('qa-checkpoint-fingerprint'));
           sessionStorage.removeItem('qa-checkpoint-fingerprint');
@@ -33,8 +33,8 @@ test('authenticated warm cache then exact graph delta on one SSE, with no camera
           window.__fixtureAuth={authenticated:state.authenticated===true, stage:state.graph_cache_stage==='test',
             scopeMatches:(await fingerprint(state.graph_cache_scope))===expected.scope,
             epochMatches:(await fingerprint(state.graph_cache_epoch))===expected.epoch};
-          return response;
-        });
+        }).catch(()=>{});
+        return answer;
       }
       if(url.origin!==location.origin||url.pathname!=='/api/v1/events'||url.searchParams.get('wire')!=='graph-v1'
           ||window.name!=='hold-qa-warm')return answer;
@@ -108,6 +108,7 @@ test('authenticated warm cache then exact graph delta on one SSE, with no camera
   requests.length=0;
   await page.reload();
   await page.waitForFunction(()=>typeof window.__fixtureRelease==='function');
+  await page.waitForFunction(()=>window.__fixtureAuth!==null);
   const authEquality=await page.evaluate(()=>window.__fixtureAuth);
   expect(authEquality).toEqual({authenticated:true,stage:true,scopeMatches:true,epochMatches:true});
   expect(eventReq()).toEqual([{path:'/api/v1/events',wire:'graph-v1',after:true,rev:true}]);
@@ -125,6 +126,13 @@ test('authenticated warm cache then exact graph delta on one SSE, with no camera
   const before=await pose();
 
   const other=await context.newPage();
+  // Playwright enables synthetic focus for every main frame by default.
+  // Restore real browser focus/visibility for this explicit tab journey.
+  const [mainFocus,otherFocus]=await Promise.all([context.newCDPSession(page),context.newCDPSession(other)]);
+  await Promise.all([mainFocus.send('Emulation.setFocusEmulationEnabled',{enabled:false}),
+    otherFocus.send('Emulation.setFocusEmulationEnabled',{enabled:false})]);
+  await page.bringToFront();
+  await page.waitForFunction(()=>document.visibilityState==='visible'&&document.hasFocus());
   await other.bringToFront();
   await page.waitForFunction(()=>document.visibilityState==='hidden',null,{polling:100,timeout:8000});
   execFileSync(process.env.GRAPH_FIXTURE_PYTHON||'python3',['-c',[
@@ -154,5 +162,6 @@ test('authenticated warm cache then exact graph delta on one SSE, with no camera
   expect(eventReq()).toHaveLength(1);
   expect(graphReq()).toEqual([]);
   await expect(status).toHaveText('Live · обновляется');
+  await Promise.all([mainFocus.detach(),otherFocus.detach()]);
   await other.close();
 });
