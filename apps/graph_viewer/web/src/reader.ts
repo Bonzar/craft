@@ -1,6 +1,6 @@
 import type {ProxyEdgeCounts} from './lod.ts';
 import { ApiError, apiUrl, get } from './api.ts';
-import { edgeSchema, incidentPageSchema, nodeSchema, sourceSchema, overviewSchema } from './contracts.ts';
+import { edgeSchema, incidentPageSchema, nodeSchema, sourceSchema, overviewSchema, nodeRemovalPreviewSchema } from './contracts.ts';
 import type { EdgeCard, NodeCard, NodeStatus, SourcePage, Topic, Topics, Manifest } from './contracts.ts';
 import { button, detail, element, note, setBusy } from './dom.ts';
 import { lifecycle } from './lifecycle.ts';
@@ -54,7 +54,7 @@ export class Reader {
   private run(task:()=>Promise<void>):void{task().catch(error=>{this.finishLoading();if(this.actions.failed)this.actions.failed(error);else{const message=humanError(error);if(message)this.actions.report(message);}});}
   private nodeAction(id:string):()=>void{const intent=this.intent,context=this.sourceContext?{...this.sourceContext}:undefined;return()=>{if(this.intent===intent)this.actions.node(id,context,intent);};}
   private edgeAction(id:string):()=>void{const intent=this.intent,context=this.sourceContext?{...this.sourceContext}:undefined;return()=>{if(this.intent===intent)this.actions.edge(id,context,intent);};}
-  showNode(card:NodeCard,topics?:Topics,onTopic?:(id:string)=>void,context?:ReaderSourceContext):void {
+  showNode(card:NodeCard,topics?:Topics,onTopic?:(id:string)=>void,context?:ReaderSourceContext,canPreview?:()=>boolean):void {
     this.finishLoading();this.liveStatus.hidden=true;this.cancel();this.sourceContext=context?{...context,revision:card.revision}:null;this.currentId=card.id;this.root.hidden=false;this.root.dataset.kind='node';this.root.dataset.nodeId=card.id;this.shell('Утверждение');this.content.replaceChildren();this.scroll.scrollTop=0;
     const status=element('div','','status-badges');const prose=element('div',card.text,'prose assertion-text');prose.dataset.textRevision=card.text_revision;prose.setAttribute('role','article');prose.setAttribute('aria-label','Текст утверждения');
     const connections=element('div','','node-connections');connections.textContent='Связи в кадре: уточняем';
@@ -62,6 +62,28 @@ export class Reader {
     const compact=element('div','','attribution');compact.append(element('div',`${card.actor?.display_name||card.actor?.id||'Автор неизвестен'} · ${this.sourceLabel(card.source)}`),element('div',`Дата события: ${formatTime(card.time.valid_at,card.time.valid_precision)}`),element('div',`Записано: ${formatTime(card.time.recorded_at,'instant')}`));
     compact.append(connections);const initialConnections=this.actions.connectionInfo?.(card.id);if(initialConnections)this.updateConnectivity(card.id,initialConnections.external,initialConnections.self);
     const tools=element('div','','reader-tools');tools.append(button('☆ В закладки',()=>this.run(()=>this.actions.bookmark('node',card.id,Array.from(card.text).slice(0,90).join('')))));
+    if(canPreview?.()){
+      const result=element('p','','notice');result.setAttribute('role','status');result.hidden=true;
+      const action=button('Проверить удаление',()=>{
+        if(!canPreview()||this.pin!==pin||pin.request.signal.aborted)return;
+        const intent=this.intent;
+        const current=()=>this.pin===pin&&this.intent===intent&&!pin.request.signal.aborted&&canPreview();
+        const label='Проверить удаление';
+        setBusy(action,true,'Проверяем…');result.hidden=true;
+        void get(apiUrl(`/nodes/${encodeURIComponent(card.id)}`,{revision:card.revision,preview_removal:1}),
+          nodeRemovalPreviewSchema,pin.request.signal).then(reply=>{
+          if(!current())return;
+          if(reply.write_authority!==false||reply.eligible!==(reply.reason===null))throw new Error('Invalid preview');
+          result.textContent=reply.eligible?'Узел прошёл проверку. Удаление недоступно.':
+            reply.reason==='dependent_thoughts'?'Проверка не пройдена: от узла зависят другие мысли.':
+            'Узел не прошёл предварительную проверку. Ничего не удалено.';
+          result.hidden=false;
+        }).catch(()=>{
+          if(current()){result.textContent='Проверка недоступна. Обновите карточку.';result.hidden=false;}
+        }).finally(()=>{if(action.isConnected)setBusy(action,false,label);});
+      });
+      tools.append(action,result);
+    }
     if(this.actions.canOverview?.()&&this.actions.overview)tools.append(button('Материал выбранной темы',this.actions.overview));this.content.append(status,compact,tools,prose);this.renderStatus(status,card.status);
     if(card.next_text_offset!==null)this.addTextContinuation(pin);
     this.appendNodeTopics(pin);

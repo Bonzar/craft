@@ -47,7 +47,7 @@ export type SearchPage = Infer<typeof searchSchema>;
 export const bookmarkSchema = object({id:str,provider_id:str,object_kind:oneOf(['node','topic']),object_id:str,label:optional(nullable(str),null),selector:optional(nullable(selectorSchema),null),created_at:str,availability:str});
 export const bookmarksSchema = object({items:array(bookmarkSchema),revision:optional(str,'')});
 export type Bookmark = Infer<typeof bookmarkSchema>;
-export const capabilitiesSchema = object({provider_id:str,capabilities:object({full_graph:bool,topics:bool,topic_hierarchy:bool,source_context:bool,whole_saved_source:bool,keyword_search:bool,semantic_search:bool,history:bool,live:bool,session_filter:optional(bool,false)}),readiness:array(object({code:str,message:str})),owner_live_transport:optional(unknownValue,null),owner_live_bootstrap:optional(unknownValue,null),owner_live_graph_v1:optional(bool,false),limits:optional(unknownValue,null)});
+export const capabilitiesSchema = object({provider_id:str,capabilities:object({full_graph:bool,topics:bool,topic_hierarchy:bool,source_context:bool,whole_saved_source:bool,keyword_search:bool,semantic_search:bool,history:bool,live:bool,session_filter:optional(bool,false),owner_node_removal_preview:optional(bool,false)}),readiness:array(object({code:str,message:str})),owner_live_transport:optional(unknownValue,null),owner_live_bootstrap:optional(unknownValue,null),owner_live_graph_v1:optional(bool,false),limits:optional(unknownValue,null)});
 export type Capabilities = Infer<typeof capabilitiesSchema>;
 export const sessionSchema = object({authenticated:optional(bool,false),owner:optional(bool,false),csrf_token:optional(str,''),graph_cache_scope:optional(unknownValue,null),graph_cache_epoch:optional(unknownValue,null)});
 export const deltaSchema = object({cursor:str,base_revision:str,revision:str,source_revision:str,upsert_nodes:array(object({id:str,ordinal:uint,position:vector,flags:uint})),upsert_edges:array(object({id:str,ordinal:uint,from:uint,to:uint})),remove_node_ordinals:array(uint),remove_edge_ordinals:array(uint),status_changes:array(object({id:str,ordinal:uint,status:statusSchema,flags:uint})),topic_changes:array(unknownValue),manifest:optional(nullable(manifestSchema),null),captured_at:str});
@@ -57,3 +57,5 @@ export const resetSchema = object({cursor:optional(str,''),revision:str,reason:s
 
 export const overviewSchema=object({...materialEvidenceFields,topic_id:str,revision:str,provider_id:str,source_ref:object({view_id:str,version_id:uint,route_revision:optional(nullable(uint),null),source_version_id:optional(unknownValue,null)}),available_at:nullableString,freshness:str,text:str,offset:uint,text_total:uint,next_offset:nullable(uint),text_revision:str,offset_unit:str});
 export type OverviewPage=Infer<typeof overviewSchema>;
+
+export const nodeRemovalPreviewSchema=object({eligible:bool,reason:nullable(str),write_authority:bool});

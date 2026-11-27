@@ -326,3 +326,51 @@ test('packed queue remains visible and readable after WebGL creation fails',asyn
   expect(wire.length).toBeGreaterThan(0);
   expect(graph).toEqual([]);
 });
+
+test('TEST owner can use visible node preview without any mutation authority',async({nativeBrowser:{context,page}})=>{
+  test.skip(process.env.GRAPH_BROWSER_VARIANT==='packed','source-built native Visual owns the preview button');
+  const base=realpathSync(process.env.GRAPH_BROWSER_FIXTURE);
+  const port=Number(readFileSync(join(base,'preview-port'),'utf8'));
+  expect(Number.isInteger(port)&&port>1024&&port<65536).toBe(true);
+  const origin='https://127.0.0.1:'+port;
+  const node=readFileSync(join(base,'preview-node'),'utf8');
+  const expectedSHA=readFileSync(join(base,'preview-db-sha'),'utf8');
+  const nodePath='/api/v1/nodes/'+encodeURIComponent(node);
+  const entry=new URL(origin);
+  entry.searchParams.set('kind','node');
+  entry.searchParams.set('id',node);
+  const effects=[];
+  let loggedIn=false;
+  await context.route('**/*',route=>{
+    const req=route.request(), url=new URL(req.url());
+    if(url.origin!==origin)return ['about:','blob:','data:'].includes(url.protocol)?route.continue():route.abort();
+    if(loggedIn&&url.pathname.startsWith('/api/')&&!['GET','HEAD'].includes(req.method())){
+      effects.push([req.method(),url.pathname]);
+      return route.abort();
+    }
+    return route.continue();
+  });
+  await page.goto(entry.href,{waitUntil:'domcontentloaded'});
+  const toggle=page.getByRole('button',{name:'Проверить удаление',exact:true});
+  await expect(toggle).toHaveCount(0);
+  const anon=await page.evaluate(async()=>await fetch('/api/v1/capabilities',{cache:'no-store'}).then(async r=>({status:r.status,value:r.ok?await r.json():null})));
+  expect(anon.status===401||anon.value?.capabilities?.owner_node_removal_preview!==true).toBe(true);
+  await page.locator('#password').fill('synthetic-only-owner');
+  const login=page.waitForResponse(r=>new URL(r.url()).pathname==='/api/v1/session'&&r.request().method()==='POST'&&r.status()===200);
+  await page.locator('#login-button').click();
+  await login;
+  loggedIn=true;
+  const caps=await page.evaluate(async()=>await fetch('/api/v1/capabilities',{cache:'no-store'}).then(r=>r.json()));
+  expect(caps.capabilities.owner_node_removal_preview).toBe(true);
+  await expect(page.locator('#reader .assertion-text')).toHaveText('Fictional node preview');
+  const response=page.waitForResponse(r=>{const u=new URL(r.url());return u.origin===origin&&u.pathname===nodePath&&u.searchParams.get('preview_removal')==='1';});
+  await toggle.click();
+  const preview=await response;
+  expect(preview.request().method()).toBe('GET');
+  expect(preview.status()).toBe(200);
+  expect(await preview.json()).toEqual({eligible:true,reason:null,write_authority:false});
+  await expect(page.getByText('Узел прошёл проверку. Удаление недоступно.',{exact:true})).toBeVisible();
+  await expect(page.getByRole('button',{name:'Удалить',exact:true})).toHaveCount(0);
+  expect(effects).toEqual([]);
+  expect(createHash('sha256').update(readFileSync(join(base,'preview.sqlite3'))).digest('hex')).toBe(expectedSHA);
+});
