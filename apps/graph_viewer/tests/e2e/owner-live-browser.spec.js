@@ -1,10 +1,57 @@
-import {test,expect} from '@playwright/test';
-import {readFileSync,realpathSync} from 'node:fs';
+import {test as baseTest,expect,chromium} from '@playwright/test';
+import {readFileSync,realpathSync,mkdtempSync,rmSync} from 'node:fs';
+import {createHash,X509Certificate} from 'node:crypto';
+import {once} from 'node:events';
 import {join} from 'node:path';
-import {execFileSync} from 'node:child_process';
+import {execFileSync,spawn} from 'node:child_process';
+import {setTimeout as delay} from 'node:timers/promises';
 
-test.use({ignoreHTTPSErrors:true,reducedMotion:'reduce',launchOptions:{chromiumSandbox:true,ignoreDefaultArgs:['--disable-backgrounding-occluded-windows','--disable-renderer-backgrounding']}});
-test('authenticated warm cache then exact graph delta on one SSE, with no camera or geometry jump',async({context,page})=>{
+const test=baseTest.extend({
+  nativeBrowser:async({},use)=>{
+    const dir=realpathSync(process.env.GRAPH_BROWSER_FIXTURE);
+    const profile=mkdtempSync(join(dir,'chrome-'));
+    const cert=new X509Certificate(readFileSync(join(dir,'cert')));
+    const key=createHash('sha256').update(cert.publicKey.export({type:'spki',format:'der'})).digest('base64');
+    // Official system Chrome's normal sandbox remains on. The process has
+    // only a disposable profile and trusts only this fixture's unique TLS key.
+    const chrome=spawn('/opt/google/chrome/chrome',[
+      '--no-first-run','--no-default-browser-check','--disable-background-networking',
+      '--disable-component-update','--disable-default-apps','--disable-sync',
+      '--user-data-dir='+profile,'--remote-debugging-address=127.0.0.1','--remote-debugging-port=0',
+      '--ignore-certificate-errors-spki-list='+key,
+      '--use-gl=angle','--use-angle=swiftshader','--enable-unsafe-swiftshader','about:blank',
+    ],{stdio:'ignore'});
+    let browser;
+    const exited=once(chrome,'exit').catch(()=>{});
+    try{
+      let endpoint;
+      for(let attempt=0;attempt<100&&!endpoint;attempt++){
+        if(chrome.exitCode!==null||chrome.signalCode!==null)break;
+        try{
+          const [port,path]=readFileSync(join(profile,'DevToolsActivePort'),'utf8').split('\n');
+          if(/^[0-9]{4,5}$/.test(port)&&+port<=65535&&/^\/devtools\/browser\/[a-f0-9-]+$/i.test(path))
+            endpoint='ws://127.0.0.1:'+port+path;
+        }catch{}
+        if(!endpoint)await delay(100);
+      }
+      expect(endpoint,'Sandboxed system Chrome must open an ephemeral loopback DevTools socket').toBeTruthy();
+      // Do not let Playwright continuously emulate focus for these real tabs.
+      browser=await chromium.connectOverCDP(endpoint,{noDefaults:true,timeout:8000});
+      const [context]=browser.contexts(),[page]=context.pages();
+      expect(page).toBeTruthy();
+      await use({context,page});
+    }finally{
+      try{await browser?.close();}finally{
+        if(chrome.exitCode===null&&chrome.signalCode===null)chrome.kill('SIGTERM');
+        await Promise.race([exited,delay(3000)]);
+        if(chrome.exitCode===null&&chrome.signalCode===null)chrome.kill('SIGKILL');
+        await Promise.race([exited,delay(1000)]);
+        rmSync(profile,{recursive:true,force:true});
+      }
+    }
+  }
+});
+test('authenticated warm cache then exact graph delta on one SSE, with no camera or geometry jump',async({nativeBrowser:{context,page}})=>{
   const base=realpathSync(process.env.GRAPH_BROWSER_FIXTURE);
   const port=Number(readFileSync(join(base,'fixture-port'),'utf8'));
   expect(Number.isInteger(port)&&port>1024&&port<65536).toBe(true);
@@ -131,11 +178,7 @@ test('authenticated warm cache then exact graph delta on one SSE, with no camera
   // window.open with no popup features creates a normal tab in the same
   // Chrome window. Drive Chrome's own tab-strip shortcut, not DOM events.
   const [other]=await Promise.all([page.waitForEvent('popup',{timeout:8000}),page.evaluate(()=>{window.open('about:blank','_blank');})]);
-  // Playwright enables synthetic focus for every main frame by default.
-  // Restore real browser focus/visibility for this explicit tab journey.
   const [mainFocus,otherFocus]=await Promise.all([context.newCDPSession(page),context.newCDPSession(other)]);
-  await Promise.all([mainFocus.send('Emulation.setFocusEmulationEnabled',{enabled:false}),
-    otherFocus.send('Emulation.setFocusEmulationEnabled',{enabled:false})]);
   await page.bringToFront();
   await page.waitForFunction(()=>document.visibilityState==='visible'&&document.hasFocus(),null,{timeout:8000});
   const [mainWindow,otherWindow]=await Promise.all([mainFocus.send('Browser.getWindowForTarget'),otherFocus.send('Browser.getWindowForTarget')]);
