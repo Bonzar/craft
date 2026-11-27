@@ -1,0 +1,100 @@
+# SOURCE REVIEW ONLY. Never under .github/workflows without separate review.
+name: Base .35 two replica unsigned full-package proof
+on:
+  workflow_dispatch:
+permissions: {}
+concurrency:
+  group: base-035-two-hermetic-builds
+  cancel-in-progress: false
+jobs:
+  replica_a:
+    # On separate approval, require workflow_dispatch, Bonzar/craft, exact
+    # protected refs/heads/main and run_attempt == '1'.
+    if: false
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+    timeout-minutes: 30
+    outputs: &proof_fields
+      release_id: ${{ steps.qualify.outputs.release_id }}
+      revision: ${{ steps.qualify.outputs.revision }}
+      verified_graph_catalogue_tar_sha256: ${{ steps.qualify.outputs.verified_graph_catalogue_tar_sha256 }}
+      full_base_archive_sha256: ${{ steps.qualify.outputs.full_base_archive_sha256 }}
+      full_file_manifest_sha256: ${{ steps.qualify.outputs.full_file_manifest_sha256 }}
+      full_member_count: ${{ steps.qualify.outputs.full_member_count }}
+    steps: &qualify_steps
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Pin and stage public inputs independently on this fresh runner
+        working-directory: tools/assertion-memory-release/rollback-input-review
+        shell: bash
+        run: |
+          set -euo pipefail
+          store="$RUNNER_TEMP/public35"
+          tag=refs/tags/assertion-memory-v0.1.35
+          revision=710cf557d29cf91e6ab1550d27e525817df96588
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse "${tag}^{commit}")" = "$revision"
+          python3 -B materialize_035_inputs.py "$store"
+          python3 -B materialize_035_public_runtime.py "$store"
+          git archive --format=tar "$revision" -- apps/graph_viewer prototypes/assertion_memory > "$store/source.tar"
+          python3 -B verify_035_material.py --source "$store/source.tar"
+          python3 -B stage_035_oci_layout.py stage "$store/oci-blobs" \
+            "$store/native-libraries/native-library-layer.tar" "$RUNNER_TEMP/oci"
+      - name: Compile offline under the separately qualified current Docker identity
+        working-directory: tools/assertion-memory-release/rollback-input-review
+        shell: bash
+        run: bash hosted_035_build_qualified.sh "$RUNNER_TEMP/oci" "$PWD" "$RUNNER_TEMP/public35" "$RUNNER_TEMP/built"
+      - name: Verify exact full manifest and expose digest-only proof
+        id: qualify
+        working-directory: tools/assertion-memory-release/rollback-input-review
+        shell: bash
+        run: PYTHONPATH=.. python3 -B hosted_035_full_qualify.py "$RUNNER_TEMP/built/proof"
+      - name: Delete disposable input and output bytes
+        if: ${{ always() }}
+        shell: bash
+        run: rm -rf -- "$RUNNER_TEMP/public35" "$RUNNER_TEMP/oci" "$RUNNER_TEMP/built"
+  replica_b:
+    if: false
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+    timeout-minutes: 30
+    outputs: *proof_fields
+    steps: *qualify_steps
+  compare:
+    if: false
+    needs: [replica_a, replica_b]
+    runs-on: ubuntu-26.04
+    permissions: {}
+    timeout-minutes: 4
+    env:
+      PROOF_A: ${{ toJSON(needs.replica_a.outputs) }}
+      PROOF_B: ${{ toJSON(needs.replica_b.outputs) }}
+    steps:
+      - name: Require equal locally validated manifest and packed byte digests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -I - <<'PY'
+          import json, os, re
+          def proof(name):
+              p=json.loads(os.environ[name])
+              if set(p)!={"release_id","revision","verified_graph_catalogue_tar_sha256",
+                          "full_base_archive_sha256","full_file_manifest_sha256","full_member_count"}:
+                  raise ValueError("Incomplete unsigned proof")
+              if p["release_id"]!="459435759" or p["revision"]!="710cf557d29cf91e6ab1550d27e525817df96588":
+                  raise ValueError("Wrong historical source proof")
+              for field in ("verified_graph_catalogue_tar_sha256","full_base_archive_sha256","full_file_manifest_sha256"):
+                  if not re.fullmatch(r"[a-f0-9]{64}",p[field]):
+                      raise ValueError("Wrong proof digest")
+              if not re.fullmatch(r"[1-9][0-9]{0,4}",p["full_member_count"]):
+                  raise ValueError("Wrong proof member count")
+              return p
+          if proof("PROOF_A")!=proof("PROOF_B"):
+              raise ValueError("Independent full packages diverged")
+          print("Independent unsigned full packages and manifests match (SHA-256); no archive transferred.")
+          PY
