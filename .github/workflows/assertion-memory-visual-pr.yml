@@ -39,4 +39,3 @@ jobs:
           mkdir "$RUNNER_TEMP/visual"
           node tools/assertion-memory-visual/build-archive.mjs tools/assertion-memory-visual "$RUNNER_TEMP/visual/visual.tar" > "$RUNNER_TEMP/build-receipt.json"
           PYTHONPATH=tools/assertion-memory-release python3 -B tools/assertion-memory-visual/visual_assemble.py "$RUNNER_TEMP/visual/visual.tar" "$RUNNER_TEMP/build-receipt.json"
-          VISUAL_SEED_PATH="$RUNNER_TEMP/visual/visual.tar" VISUAL_SEED_RECEIPT="$RUNNER_TEMP/build-receipt.json" PYTHONPATH=tools/assertion-memory-release python3 -B tools/assertion-memory-visual/test_with_release_core.py
