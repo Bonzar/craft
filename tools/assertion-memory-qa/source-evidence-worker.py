@@ -144,6 +144,13 @@ def frozen_tool_atom_receipt(meaning,grounds):
 
 FIXTURES={x['id']:x for x in json.loads(Path(__file__).with_name('source-evidence-fixtures.json').read_text())}
 case=FIXTURES[sys.argv[1]]
+want_receipt=sys.argv[2:]==['--private-receipt-check']
+if sys.argv[2:] and not want_receipt:raise SystemExit('unexpected QA worker option')
+fixture_bytes=Path(__file__).with_name('source-evidence-fixtures.json').read_bytes()
+if want_receipt:
+ from source_evidence_receipt import EXPECTED,FIXTURE_CATALOG_SHA,sha as receipt_sha
+ if case['id'] not in EXPECTED or receipt_sha(fixture_bytes)!=FIXTURE_CATALOG_SHA:
+  raise SystemExit('not the fixed synthetic evidence allowlist')
 with tempfile.TemporaryDirectory(prefix='fictional-evidence-policy-') as scratch:
  path=Path(scratch)/'fixture.sqlite3'
  config=ServiceConfig(db=str(path),provider='codex',model='gpt-6.2-sol',review_model='gpt-6.2-sol',
@@ -203,4 +210,14 @@ with tempfile.TemporaryDirectory(prefix='fictional-evidence-policy-') as scratch
   if case['id']=='typed_tool_result':value['published_tool_checks']=tool_checks
   value['outcome']=('pass' if good_trace and value['recall_pass'] and value['false_save_pass']
                     else 'fail' if good_trace else 'inconclusive')
+  if want_receipt:
+   from source_evidence_receipt import validate_worker_receipt
+   from prototypes.assertion_memory.model import ModelRequest,format_prompt
+   try:
+    exact_rows=[(stage,status,q,a,checked(qb,q),checked(ab,a))
+                for stage,status,q,a,qb,ab in trace[:32]]
+    value['private_receipt_check']=validate_worker_receipt(case['id'],fixture_bytes,exact_rows,ModelRequest,format_prompt)
+   except (ValueError,TypeError,KeyError,IndexError,zlib.error):
+    value['private_receipt_check']={'exact_replay_validated':False,'raw_receipt_retained':False}
+    value['outcome']='inconclusive'
   print(json.dumps(value))
