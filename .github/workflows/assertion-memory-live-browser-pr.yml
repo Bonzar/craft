@@ -1,0 +1,58 @@
+name: Assertion Memory Live browser PR
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/assertion-memory-live-browser-pr.yml"
+      - "apps/graph_viewer/**"
+permissions: {}
+jobs:
+  live-browser:
+    if: github.repository == 'Bonzar/craft'
+    runs-on: ubuntu-latest
+    timeout-minutes: 14
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065b
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "24"
+      - name: Install pinned lexical and browser dependencies
+        run: |
+          grep -v '^fastembed==' apps/graph_viewer/requirements.txt > "$RUNNER_TEMP/graph-lexical.txt"
+          python -m pip install -r "$RUNNER_TEMP/graph-lexical.txt"
+          npm ci --prefix apps/graph_viewer
+          npm run build --prefix apps/graph_viewer
+          npm ci --prefix apps/graph_viewer/tests/e2e
+          cd apps/graph_viewer/tests/e2e
+          npx --no-install playwright install --with-deps chromium
+      - name: Exercise one authenticated SSE in headed sandboxed Chromium
+        run: |
+          export PYTHONPATH="$GITHUB_WORKSPACE"
+          export GRAPH_BROWSER_FIXTURE="$RUNNER_TEMP/owner-live-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          python -B apps/graph_viewer/tests/e2e/owner-live-browser-fixture.py \
+            "$GRAPH_BROWSER_FIXTURE" "$GITHUB_WORKSPACE/apps/graph_viewer/web/dist" &
+          fixture_pid=$!
+          trap 'kill "$fixture_pid" 2>/dev/null || true; wait "$fixture_pid" 2>/dev/null || true' EXIT
+          ready=0
+          for attempt in {1..40}; do
+            kill -0 "$fixture_pid"
+            if [[ -s "$GRAPH_BROWSER_FIXTURE/fixture-port" ]]; then
+              read -r port < <(cat "$GRAPH_BROWSER_FIXTURE/fixture-port"; printf '\n')
+              if [[ "$port" =~ ^[0-9]{4,5}$ ]] && curl --noproxy '*' --cacert "$GRAPH_BROWSER_FIXTURE/cert" \
+                --fail --silent --max-time 1 "https://127.0.0.1:${port}/api/v1/health" >/dev/null; then
+                ready=1
+                break
+              fi
+            fi
+            sleep .5
+          done
+          [[ "$ready" == 1 ]] || { echo "::error::Disposable TLS fixture failed to start"; exit 1; }
+          cd apps/graph_viewer/tests/e2e
+          xvfb-run -a npm test -- owner-live-browser.spec.js --project=chromium --headed
