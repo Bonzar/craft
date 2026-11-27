@@ -427,8 +427,8 @@ class OwnerBrowserStartup(unittest.TestCase):
         from apps.graph_viewer.server import browser_owner_api
         from apps.graph_viewer.server.browser_owner_api import BrowserOwnerAPI
         dummy=SimpleNamespace(stage='prod')
-        def factory(stage,clear=False):
-            return BrowserOwnerAPI(stage=stage,clear_enabled=clear,perform=lambda *_:self.fail(),
+        def factory(stage,clear=False,single=False):
+            return BrowserOwnerAPI(stage=stage,clear_enabled=clear,single_clear=single,perform=lambda *_:self.fail(),
                                    queue_snapshot=lambda **_:self.fail())
         with (patch.object(queue_dashboard,'configured_browser_dashboard',return_value=dummy) as binder,
               patch.object(browser_owner_api,'configured_browser_api') as direct):
@@ -439,9 +439,13 @@ class OwnerBrowserStartup(unittest.TestCase):
             for wrong in (None,SimpleNamespace(stage='prod',clear_enabled=False),factory('test'),factory('prod',True)):
                 with self.assertRaisesRegex(ValueError,'Wrong private Base writer'):
                     configure_owner_lanes(self.args(),prod_owner_api=lambda _d: wrong)
+            protected_clear=factory('prod',True,True)
+            self.assertIs(configure_owner_lanes(self.args(),prod_owner_api=lambda _: protected_clear)[1],
+                          protected_clear)
             direct.assert_not_called()
             configure_owner_lanes(self.args(queue_status_stage='test'))
-            direct.assert_called_once_with(dummy,clear_enabled=False)
+            direct.assert_called_once_with(dummy,clear_profile=None,graph_node_bridge=None,
+                                           ordinary_test_clear=True)
 
     def test_prod_reader_policy_canonical_db_release_and_fence_are_distinct_from_writer(self):
         from contextlib import contextmanager
