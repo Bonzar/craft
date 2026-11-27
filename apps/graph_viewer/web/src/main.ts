@@ -1,3 +1,8 @@
+import './owner-startup-loading.css';
+import {openOwnerGraphSession} from './owner-graph-session.mjs';
+import type {OwnerGraphBaseline,OwnerGraphStored,OwnerGraphEvent,OwnerGraphSession,OwnerGraphCache} from './owner-graph-session.mjs';
+import {ownerGraphCache,browserOwnerTopologyStore,ownerGraphCheckpointKey} from './owner-graph-cache.mjs';
+import {extendOwnerGraphPositions,ownerGraphDeltaIds,type OwnerPlacement} from './owner-graph-position.mjs';
 import {firstOwnerSnapshot,openOwnerLive,type FirstOwnerSnapshot,type OwnerLiveHandle} from './owner-live-controller.mjs';
 import {sourceReadinessNotice} from './source-access.ts';
 import {applyMembershipPatch,checkedDeltaManifest} from './membership-patch.ts';
@@ -149,14 +154,14 @@ class Viewer {
     }
     const message=humanError(error);if(message)this.notice(message);
   }
-  private async session():Promise<void>{try{const state=await bootStep('session','Сервер не ответил на проверку входа. Повторите.',signal=>get('/session',sessionSchema,signal));if(!state.authenticated){this.showLogin();return;}this.csrf=state.csrf_token;await this.start();}catch(error){if(!(error instanceof ApiError&&error.status===401))this.failLoad(humanError(error));throw error;}}
-  private showLogin():void{this.authenticated=false;byId('universe',HTMLElement).inert=true;clearTimeout(this.capabilityTimer);this.login.hidden=false;this.loading.hidden=true;this.stopOwnerLive();this.stream?.close();byId('logout',HTMLButtonElement).hidden=true;requestAnimationFrame(()=>byId('password',HTMLInputElement).focus());}
-  private async authenticate():Promise<void>{const password=byId('password',HTMLInputElement);const submit=byId('login-button',HTMLButtonElement);setBusy(submit,true,'Войти');let accepted=false;byId('login-error',HTMLElement).textContent='';try{const state=await write('/session','POST',{password:password.value},'',sessionSchema);if(!state.owner&&!state.authenticated)throw new Error('Не удалось войти');accepted=true;this.csrf=state.csrf_token;password.value='';await this.start();}catch(error){if(accepted){if(error instanceof ApiError&&error.status===401){this.showLogin();byId('login-error',HTMLElement).textContent='Сессия истекла. Войдите ещё раз.';}else this.failLoad(humanError(error));}else byId('login-error',HTMLElement).textContent=error instanceof ApiError&&error.status===401?'Пароль не подошёл.':humanError(error);}finally{password.value='';setBusy(submit,false,'Войти');}}
+  private async session():Promise<void>{try{const state=await bootStep('session','Сервер не ответил на проверку входа. Повторите.',signal=>get('/session',sessionSchema,signal));if(!state.authenticated){this.showLogin();return;}this.readGraphWireAuth(state);this.csrf=state.csrf_token;await this.start();}catch(error){if(!(error instanceof ApiError&&error.status===401))this.failLoad(humanError(error));throw error;}}
+  private showLogin():void{this.discardGraphWire();this.authenticated=false;byId('universe',HTMLElement).inert=true;clearTimeout(this.capabilityTimer);this.login.hidden=false;this.loading.hidden=true;this.stopOwnerLive();this.stream?.close();byId('logout',HTMLButtonElement).hidden=true;requestAnimationFrame(()=>byId('password',HTMLInputElement).focus());}
+  private async authenticate():Promise<void>{const password=byId('password',HTMLInputElement);const submit=byId('login-button',HTMLButtonElement);setBusy(submit,true,'Войти');let accepted=false;byId('login-error',HTMLElement).textContent='';try{const state=await write('/session','POST',{password:password.value},'',sessionSchema);if(!state.owner&&!state.authenticated)throw new Error('Не удалось войти');accepted=true;this.readGraphWireAuth(state);this.csrf=state.csrf_token;password.value='';await this.start();}catch(error){if(accepted){if(error instanceof ApiError&&error.status===401){this.showLogin();byId('login-error',HTMLElement).textContent='Сессия истекла. Войдите ещё раз.';}else this.failLoad(humanError(error));}else byId('login-error',HTMLElement).textContent=error instanceof ApiError&&error.status===401?'Пароль не подошёл.':humanError(error);}finally{password.value='';setBusy(submit,false,'Войти');}}
   private ensureLiveScene():void{if(!this.scene){try{this.scene=new UniverseScene(this.canvas,byId('topic-labels',HTMLElement),picked=>this.run(()=>this.picked(picked)),topic=>this.openTopic(topic),(x,y)=>this.feedback(x,y),error=>this.handleError(error),lod=>this.updateRepresentation(lod),entry=>this.run(()=>this.openNode(entry.id)),metrics=>this.updateReaderConnections(metrics));}catch{throw new Error('Для вселенной нужен браузер с WebGL 2. Проверьте аппаратное ускорение.');}}}
-  private async start():Promise<void>{this.authenticated=true;byId('universe',HTMLElement).inert=false;this.login.hidden=true;byId('logout',HTMLButtonElement).hidden=false;this.setConnection('Подключаемся к live-потоку',false);this.ownerStartupPending=true;window.dispatchEvent(new CustomEvent('owner-live-startup'));
-    try{this.capabilities=await bootStep('session','Источник не ответил после входа. Повторите.',signal=>get('/capabilities',capabilitiesSchema,signal));}catch(error){this.ownerStartupPending=false;if(!(error instanceof ApiError&&error.status===401)){this.setConnection('Нет live-связи · снимок',false);window.dispatchEvent(new CustomEvent('owner-live-offline'));}throw error;}const query=new URLSearchParams(location.search);const foreign=sourceObjectAccess(this.capabilities.provider_id,query.get('provider_id'))==='foreign_source';if(foreign){this.clearContextSelection();const previous=this.currentContext();this.selector=temporalSelector('current','',previous.zone,false,'separate');this.acceptedContext={...previous,selector:{...this.selector}};this.applyContextInputs(this.acceptedContext);}await this.bootstrapOwnerGraph();this.renderCapabilities();if(foreign){this.objectSourceReady(query.get('provider_id'));return;}await this.openDeepLink(query);}
+  private async start():Promise<void>{this.authenticated=true;byId('universe',HTMLElement).inert=false;this.login.hidden=true;byId('logout',HTMLButtonElement).hidden=false;this.loading.classList.add('owner-loading-inline');this.loading.hidden=true;this.setConnection('Подключаемся к live-потоку',false);this.ownerStartupPending=true;window.dispatchEvent(new CustomEvent('owner-live-startup'));
+    try{this.capabilities=await bootStep('session','Источник не ответил после входа. Повторите.',signal=>get('/capabilities',capabilitiesSchema,signal));}catch(error){this.ownerStartupPending=false;if(!(error instanceof ApiError&&error.status===401)){this.setConnection('Нет live-связи · снимок',false);window.dispatchEvent(new CustomEvent('owner-live-offline'));}throw error;}const query=new URLSearchParams(location.search);const foreign=sourceObjectAccess(this.capabilities.provider_id,query.get('provider_id'))==='foreign_source';if(foreign){this.clearContextSelection();const previous=this.currentContext();this.selector=temporalSelector('current','',previous.zone,false,'separate');this.acceptedContext={...previous,selector:{...this.selector}};this.applyContextInputs(this.acceptedContext);}if(this.capabilities.owner_live_graph_v1)await this.openGraphWire(this.currentContext());else await this.bootstrapOwnerGraph();this.renderCapabilities();if(foreign){this.objectSourceReady(query.get('provider_id'));return;}await this.openDeepLink(query);}
   private async manifestFor(signal:AbortSignal,selector:Selector):Promise<Manifest>{while(!signal.aborted){const reply=await response(apiUrl('/graph',{mode:selector.mode,at:selector.at,history:selector.history?1:0,undated:selector.undated,session_id:selector.session_id,run_id:selector.run_id,output_snapshot_id:selector.output_snapshot_id}),signal);const body:unknown=await reply.json();if(reply.status===202){const preparation=prepSchema.parse(body);byId('loading-detail',HTMLElement).textContent='Источник готовит полную вселенную…';await pause(Math.min(3000,Math.max(100,preparation.retry_after_ms)),signal);continue;}const manifest=manifestSchema.parse(body);if((manifest.selector.session_id??null)!==(selector.session_id??null))throw new ApiError(409,'session_unavailable','Сессия недоступна в этом срезе.');if((manifest.selector.run_id??null)!==(selector.run_id??null)||(selector.output_snapshot_id!==null&&selector.output_snapshot_id!==undefined&&manifest.session_filter?.overview_history?.snapshot_id!==selector.output_snapshot_id))throw new ApiError(409,'run_unavailable','Обработка недоступна в сохранённой истории.');return manifest;}throw new DOMException('Aborted','AbortError');}
-  private loadGraph(context?:SliceContext, preserveOwnerLive=false):Promise<void>{if(this.ownerStartupPending)return Promise.resolve();lifecycle('load-graph',{manual:context!==undefined});
+  private loadGraph(context?:SliceContext, preserveOwnerLive=false):Promise<void>{if(this.ownerStartupPending)return Promise.resolve();if(this.capabilities?.owner_live_graph_v1===true)return this.openGraphWire(context??this.currentContext());lifecycle('load-graph',{manual:context!==undefined});
     if(this.changingContext&&!context)return Promise.resolve();
     if(!context&&this.graphLoading)return this.graphLoading;
     const task=this.fetchGraph(context??this.currentContext(),preserveOwnerLive);this.graphLoading=task;
@@ -194,19 +199,20 @@ class Viewer {
       button.setAttribute('aria-pressed',String(nextMode==='edges'));this.updateReaderConnections();
     }finally{button.disabled=false;if(!accepted)worker.dispose();}
   }
-  private async presentGraph(graph:GraphData,manifest:Manifest,topics:Topics,worker:GraphWorker,resetCamera:boolean,current:()=>boolean,signal?:AbortSignal,preserveSearch=false,mode=this.layoutMode):Promise<number|null>{
+  private async presentGraph(graph:GraphData,manifest:Manifest,topics:Topics,worker:GraphWorker,resetCamera:boolean,current:()=>boolean,signal?:AbortSignal,preserveSearch=false,mode=this.layoutMode,placement?:{fixed?:Float32Array;remember(positions:Float32Array):void;preserveCamera:boolean}):Promise<number|null>{
     if(!current()||signal?.aborted)throw new DOMException('Aborted','AbortError');
     // Keep Source graph/topics/manifest in Viewer for deltas and Reader provenance.
     // A fresh worker bind discards Source-coordinate spatial caches, even at the
     // same revision; Scene and all worker geometry now share this visual layout.
-    const visual=deriveVisualSceneData(graph,topics,{history:manifest.selector.history,sessionId:manifest.selector.session_id,mode});
+    const visual=deriveVisualSceneData(graph,topics,{history:manifest.selector.history,sessionId:manifest.selector.session_id,mode,fixedPositions:placement?.fixed});
+    placement?.remember(visual.graph.positions);
     const visualGraph=await worker.loadPatchedGraph(visual.graph,{upsert_nodes:[],upsert_edges:[],remove_node_ordinals:[],remove_edge_ordinals:[],status_changes:[]},manifest.selector.history,visual.topics,manifest.revision);
     if(!current()||signal?.aborted)throw new DOMException('Aborted','AbortError');
     const visualManifest={...manifest,bounds:visual.layout.bounds};
     for(let attempt=0;attempt<4;attempt++){
       const node=this.selectedNodeId,topic=this.selectedTopicId,search=this.searchPage;
       const selectionCurrent=():boolean=>this.selectedNodeId===node&&this.selectedTopicId===topic&&this.searchPage===search;
-      try{return await this.scene?.setGraph(visualGraph,visualManifest,visual.topics,worker,resetCamera,preserveSearch,{calibration:visual.calibration,selectedNodeId:node,searchNodeIds:preserveSearch?search?.hits.map(hit=>hit.id):undefined,signal,isCurrent:()=>current()&&selectionCurrent()})??null;}
+      try{return await this.scene?.setGraph(visualGraph,visualManifest,visual.topics,worker,resetCamera,preserveSearch,{calibration:visual.calibration,preserveCamera:placement?.preserveCamera,selectedNodeId:node,searchNodeIds:preserveSearch?search?.hits.map(hit=>hit.id):undefined,signal,isCurrent:()=>current()&&selectionCurrent()})??null;}
       catch(error){if(!(error instanceof DOMException&&error.name==='AbortError')||!current()||signal?.aborted||selectionCurrent())throw error;if(attempt===3){window.setTimeout(()=>this.run(()=>this.loadGraph()),0);throw error;}}
     }
     throw new DOMException('Aborted','AbortError');
@@ -374,12 +380,107 @@ class Viewer {
     this.worker?.dispose();this.worker=null;this.scene?.dispose();this.scene=null;
     this.graph=null;this.manifest=null;this.topics=null;this.cursor='';
   }
+  private graphWire:OwnerGraphSession|null=null;
+  private graphWireKey:symbol|null=null;
+  private graphWireCache:OwnerGraphCache|null=null;
+  private graphWireOwner:string|null=null;
+  private graphWireEpoch:string|null=null;
+  private graphWirePlacement:OwnerPlacement|null=null;
+  private readGraphWireAuth(state:{graph_cache_scope:unknown;graph_cache_epoch:unknown}):void{
+    this.graphWireOwner=typeof state.graph_cache_scope==='string'&&/^[a-f0-9]{64}$/.test(state.graph_cache_scope)?state.graph_cache_scope:null;
+    this.graphWireEpoch=typeof state.graph_cache_epoch==='string'&&/^[a-f0-9]{64}$/.test(state.graph_cache_epoch)?state.graph_cache_epoch:null;
+  }
+  private closeGraphWire():void{this.graphWire?.close();this.graphWire=null;this.graphWireKey=null;}
+  private discardGraphWire():void{
+    this.closeGraphWire();this.graphWirePlacement=null;this.graphWireOwner=null;this.graphWireEpoch=null;
+    void (this.graphWireCache??=ownerGraphCache(browserOwnerTopologyStore())).clear();
+  }
+  private openGraphWire(context:SliceContext):Promise<void>{
+    const caps=this.capabilities;
+    if(!this.authenticated||caps?.owner_live_graph_v1!==true)return Promise.resolve();
+    this.ownerStartupPending=false;
+    this.graphRequest?.abort();this.stream?.close();this.stream=null;this.stopOwnerLive();
+    const {selector}=context, provider=caps.provider_id, origin=location.origin;
+    const scope=ownerGraphCheckpointKey({origin,owner:this.graphWireOwner,provider,selector});
+    const placementScope=scope??JSON.stringify([origin,provider,selector]);
+    const key=Symbol();this.graphWireKey=key;
+    const cache=this.graphWireCache??=ownerGraphCache(browserOwnerTopologyStore());
+    const current=(signal:AbortSignal)=>this.authenticated&&this.graphWireKey===key&&!signal.aborted;
+    const selectorFields=['mode','at','history','undated','session_id','run_id','output_snapshot_id'] as const;
+    const matches=(m:Manifest)=>m.provider_id===provider&&selectorFields.every(k=>(m.selector[k]??null)===(selector[k]??null));
+    const noPatch=()=>({upsert_nodes:[],upsert_edges:[],remove_node_ordinals:[],remove_edge_ordinals:[],status_changes:[]});
+    const apply=async (event:{kind:'cached';frame:OwnerGraphStored}|{kind:'baseline';frame:OwnerGraphBaseline}|{kind:'delta';frame:OwnerGraphEvent},signal:AbortSignal):Promise<OwnerGraphStored>=>{
+      if(!current(signal))throw abortError();
+      const {frame}=event;
+      const prior=this.graphWirePlacement,next=new GraphWorker();
+      try{
+        let graph:GraphData,manifest:Manifest,topics:Topics,ids:(string|null)[];
+        if(event.kind==='delta'){
+          const delta=deltaSchema.parse(frame),old=this.manifest;
+          if(!old||!this.graph||!this.topics||!prior||prior.epoch!==frame.epoch||
+              prior.scope!==placementScope||delta.base_revision!==old.revision)throw Error('Graph delta scope differs');
+          const patch=delta.topic_changes.length?applyMembershipPatch(delta,old,this.topics):null;
+          if(delta.topic_changes.length&&!patch)throw Error('Invalid graph membership update');
+          topics=patch?.topics??{...this.topics,revision:delta.revision};
+          const supplied=patch?.manifest??checkedDeltaManifest(delta,old);
+          if(delta.manifest&&!supplied)throw Error('Invalid graph update manifest');
+          graph=await next.loadPatchedGraph(this.graph,delta,selector.history,topics,delta.revision);
+          ids=ownerGraphDeltaIds(prior.ids,delta);
+          manifest={...(supplied??old),revision:delta.revision,source_revision:delta.source_revision,
+            captured_at:delta.captured_at,live_cursor:frame.cursor,owner_live_epoch:frame.epoch,
+            counts:supplied?.counts??{...old.counts,nodes:graph.flags.length,edges:graph.edgeActive.length,
+              visible_nodes:graph.visible.reduce((a,v)=>a+v,0),visible_edges:graph.visibleEdges.length/2}};
+        }else if(event.kind==='cached'){
+          const saved=event.frame;
+          manifest=manifestSchema.parse(saved.view?.manifest);topics=topicsSchema.parse(saved.view?.topics);ids=saved.ids;
+          graph=await next.loadPatchedGraph(saved.graph,noPatch(),selector.history,topics,manifest.revision);
+        }else{
+          const baseline=event.frame;
+          manifest=manifestSchema.parse(baseline.manifest);topics=topicsSchema.parse(baseline.topics);ids=baseline.ids;
+          graph=await next.load(baseline.nodes,baseline.edges,manifest.counts.nodes,manifest.counts.edges,selector.history,topics,manifest.revision);
+        }
+        if(!current(signal)||!matches(manifest)||manifest.owner_live_epoch!==frame.epoch||manifest.revision!==frame.revision||topics.revision!==frame.revision||
+            ids.length!==graph.flags.length||manifest.counts.nodes!==graph.flags.length||manifest.counts.edges!==graph.edgeActive.length||
+            manifest.counts.visible_nodes!==graph.visible.reduce((a,x)=>a+x,0)||manifest.counts.visible_edges!==graph.visibleEdges.length/2)
+          throw Error('Graph data differs from authenticated view');
+        this.ensureLiveScene();
+        const retained=prior?.scope===placementScope&&prior.epoch===frame.epoch&&!!this.graph;
+        const fixed=event.kind==='cached'?event.frame.visualPositions:retained?
+          extendOwnerGraphPositions(prior,{scope:placementScope,epoch:frame.epoch,ids,positions:graph.positions,edges:graph.edges,edgeActive:graph.edgeActive}):undefined;
+        let placed:Float32Array|undefined;
+        const rebound=await this.presentGraph(graph,manifest,topics,next,!this.graph,()=>current(signal),signal,retained,this.layoutMode,{
+          fixed,remember:positions=>{placed=positions;},preserveCamera:retained});
+        if(!placed||!current(signal))throw abortError();
+        this.worker?.dispose();this.worker=next;this.graph=graph;this.manifest=manifest;this.topics=topics;this.cursor=frame.cursor;
+        this.graphWirePlacement={scope:placementScope,epoch:frame.epoch,ids,positions:placed};
+        this.selector={...manifest.selector};this.acceptedContext={selector:{...manifest.selector},day:context.day,zone:context.zone};
+        this.sessionFilter?.bind(manifest);this.applyContextInputs(this.acceptedContext);this.updateCounts();
+        this.selectedOrdinal=rebound??null;this.updateReaderConnections();this.loading.hidden=true;
+        if(event.kind!=='cached')window.dispatchEvent(new CustomEvent('owner-live-snapshot',{detail:{epoch:frame.epoch,queue:false}}));
+        return {epoch:frame.epoch,revision:frame.revision,cursor:frame.cursor,ids,graph,visualPositions:placed,view:{manifest,topics}};
+      }catch(error){if(this.worker!==next)next.dispose();throw error;}
+    };
+    const session=openOwnerGraphSession({selector,scope,verifiedEpoch:this.graphWireEpoch,cache:{
+      take:async name=>{const value=await cache.take(name);return value?.view?value:null;},
+      save:(name,value)=>cache.save(name,value),clear:()=>cache.clear(),
+    },onCached:(frame,s)=>apply({kind:'cached',frame},s),onSnapshot:(frame,s)=>apply({kind:'baseline',frame},s),
+    onDelta:(frame,s)=>apply({kind:'delta',frame},s),
+    onReset:({epoch},s)=>{if(current(s)&&this.graphWirePlacement?.epoch!==epoch){this.graphWirePlacement=null;this.clearOwnerLiveGraph();this.loading.hidden=true;}},
+    onState:state=>{
+      if(this.graphWireKey!==key)return;
+      if(state==='unauthorized'){this.discardGraphWire();this.clearOwnerLiveGraph();this.showLogin();return;}
+      const labels={live:'Live · обновляется',connecting:'Подключаемся к live-потоку','snapshot-connecting':'Снимок · подключаемся к Live',
+        'snapshot-offline':'Нет live-связи · снимок',offline:'Нет live-связи'};
+      this.setConnection(labels[state],state==='live');
+    }});
+    this.graphWire=session;return session.initial;
+  }
   private ownerLiveHealthy=false;
   private ownerLiveCarriesQueue=false;
   private ownerSnapshotEpoch:string|null=null;
   private ownerSnapshotBoot:FirstOwnerSnapshot|null=null;
   private ownerStartupPending=false;
-  private stopOwnerLive():void{this.ownerSnapshotBoot?.close();this.ownerSnapshotBoot=null;this.ownerSnapshotEpoch=null;this.ownerLiveHealthy=false;this.ownerLiveCarriesQueue=false;if(this.ownerLive)window.dispatchEvent?.(new CustomEvent('owner-live-connection',{detail:'closed'}));this.ownerLive?.close();this.ownerLive=null;this.ownerLiveKey='';}
+  private stopOwnerLive():void{this.closeGraphWire();this.ownerSnapshotBoot?.close();this.ownerSnapshotBoot=null;this.ownerSnapshotEpoch=null;this.ownerLiveHealthy=false;this.ownerLiveCarriesQueue=false;if(this.ownerLive)window.dispatchEvent?.(new CustomEvent('owner-live-connection',{detail:'closed'}));this.ownerLive?.close();this.ownerLive=null;this.ownerLiveKey='';}
   private async bootstrapOwnerGraph():Promise<void>{
     const bootstrap=firstOwnerSnapshot(epoch=>{
       if(!this.authenticated)return;
@@ -440,7 +541,7 @@ class Viewer {
     }});
     return true;
   }
-  private startLive():void{if(this.changingContext)return;this.stream?.close();this.stream=null;if(!this.manifest||!this.capabilities)return;if(this.capabilities.provider_id!==this.manifest.provider_id){this.setConnection('Источник изменился · показан предыдущий срез',false);return;}const policy=sourceTransport(this.capabilities.capabilities.live);if(!policy.subscribe){this.setConnection(`${policy.label} · получен ${formatTime(this.manifest.captured_at,'instant')}`,true);const dot=byId('live-dot',HTMLElement);dot.dataset.transport='snapshot';dot.style.background='#8da6c9';dot.style.boxShadow='none';return;}if(this.startDirectOwnerLive())return;this.stopOwnerLive();const stream=new EventSource(apiUrl('/events',{after:this.cursor,revision:this.manifest.revision}));this.stream=stream;const handle=(action:()=>void):void=>{if(this.stream===stream&&!this.changingContext)this.event(action);};stream.addEventListener('hello',event=>handle(()=>{const hello=parsedEvent(event as MessageEvent<string>,helloSchema);lifecycle('sse-hello',{revision:opaqueTag(hello.revision)});this.cursor=hello.cursor;this.setConnection(this.selector.mode==='known_then'?'Срез закреплён · связь есть':'Live · подключено',true);}));stream.addEventListener('heartbeat',event=>handle(()=>{const heartbeat=parsedEvent(event as MessageEvent<string>,availabilitySchema);this.setConnection(heartbeat.source_available?(this.selector.mode==='known_then'?'Срез закреплён · связь есть':'Live · обновляется'):'Источник недоступен',heartbeat.source_available);}));stream.addEventListener('unavailable',event=>handle(()=>{parsedEvent(event as MessageEvent<string>,availabilitySchema);this.setConnection(`Источник недоступен · данные от ${formatTime(this.manifest?.captured_at??null,'instant')}`,false);}));stream.addEventListener('delta',event=>handle(()=>{const delta=parsedEvent(event as MessageEvent<string>,deltaSchema);lifecycle('sse-delta',{revision:opaqueTag(delta.revision),nodes:delta.upsert_nodes.length,edges:delta.upsert_edges.length,status:delta.status_changes.length});this.liveQueue=this.liveQueue.then(async()=>{if(this.stream!==stream||this.changingContext)return;await this.applyDelta(delta);}).catch(error=>{if(this.stream!==stream||this.changingContext)return;this.notice(humanError(error));this.run(()=>this.loadGraph());});}));stream.addEventListener('reset',event=>handle(()=>{const reset=parsedEvent(event as MessageEvent<string>,resetSchema);if(reset.reason==='database_cleared'){stream.close();location.reload();return;}lifecycle('sse-reset',{revision:opaqueTag(reset.revision),reason:['history_changed','large_batch','cursor_expired','schema_changed'].includes(reset.reason)?reset.reason:'other'});this.cursor=reset.cursor;if(this.selector.mode!=='known_then')this.run(()=>this.loadGraph());}));stream.onerror=()=>{if(this.stream===stream)this.setConnection(`Нет live-связи · данные от ${formatTime(this.manifest?.captured_at??null,'instant')}`,false);};}
+  private startLive():void{if(this.capabilities?.owner_live_graph_v1===true||this.changingContext)return;this.stream?.close();this.stream=null;if(!this.manifest||!this.capabilities)return;if(this.capabilities.provider_id!==this.manifest.provider_id){this.setConnection('Источник изменился · показан предыдущий срез',false);return;}const policy=sourceTransport(this.capabilities.capabilities.live);if(!policy.subscribe){this.setConnection(`${policy.label} · получен ${formatTime(this.manifest.captured_at,'instant')}`,true);const dot=byId('live-dot',HTMLElement);dot.dataset.transport='snapshot';dot.style.background='#8da6c9';dot.style.boxShadow='none';return;}if(this.startDirectOwnerLive())return;this.stopOwnerLive();const stream=new EventSource(apiUrl('/events',{after:this.cursor,revision:this.manifest.revision}));this.stream=stream;const handle=(action:()=>void):void=>{if(this.stream===stream&&!this.changingContext)this.event(action);};stream.addEventListener('hello',event=>handle(()=>{const hello=parsedEvent(event as MessageEvent<string>,helloSchema);lifecycle('sse-hello',{revision:opaqueTag(hello.revision)});this.cursor=hello.cursor;this.setConnection(this.selector.mode==='known_then'?'Срез закреплён · связь есть':'Live · подключено',true);}));stream.addEventListener('heartbeat',event=>handle(()=>{const heartbeat=parsedEvent(event as MessageEvent<string>,availabilitySchema);this.setConnection(heartbeat.source_available?(this.selector.mode==='known_then'?'Срез закреплён · связь есть':'Live · обновляется'):'Источник недоступен',heartbeat.source_available);}));stream.addEventListener('unavailable',event=>handle(()=>{parsedEvent(event as MessageEvent<string>,availabilitySchema);this.setConnection(`Источник недоступен · данные от ${formatTime(this.manifest?.captured_at??null,'instant')}`,false);}));stream.addEventListener('delta',event=>handle(()=>{const delta=parsedEvent(event as MessageEvent<string>,deltaSchema);lifecycle('sse-delta',{revision:opaqueTag(delta.revision),nodes:delta.upsert_nodes.length,edges:delta.upsert_edges.length,status:delta.status_changes.length});this.liveQueue=this.liveQueue.then(async()=>{if(this.stream!==stream||this.changingContext)return;await this.applyDelta(delta);}).catch(error=>{if(this.stream!==stream||this.changingContext)return;this.notice(humanError(error));this.run(()=>this.loadGraph());});}));stream.addEventListener('reset',event=>handle(()=>{const reset=parsedEvent(event as MessageEvent<string>,resetSchema);if(reset.reason==='database_cleared'){stream.close();location.reload();return;}lifecycle('sse-reset',{revision:opaqueTag(reset.revision),reason:['history_changed','large_batch','cursor_expired','schema_changed'].includes(reset.reason)?reset.reason:'other'});this.cursor=reset.cursor;if(this.selector.mode!=='known_then')this.run(()=>this.loadGraph());}));stream.onerror=()=>{if(this.stream===stream)this.setConnection(`Нет live-связи · данные от ${formatTime(this.manifest?.captured_at??null,'instant')}`,false);};}
   private event(action:()=>void):void{try{action();}catch(error){this.notice(humanError(error));this.run(()=>this.loadGraph());}}
   private async applyDelta(delta:Delta):Promise<void>{
     if(this.changingContext)return;const transport=this.stream;const manifest=this.manifest;const worker=this.worker;const acceptedGraph=this.graph;
@@ -489,6 +590,6 @@ class Viewer {
   }
   private updateUrl(kind?:'node'|'edge'|'topic',id?:string):void{const url=new URL(location.href);url.search='';if(kind&&id){url.searchParams.set('kind',kind);url.searchParams.set('id',id);if(this.manifest)url.searchParams.set('provider_id',this.manifest.provider_id);}url.searchParams.set('mode',this.selector.mode);if(this.selector.mode!=='current'){url.searchParams.set('at',this.selector.at??'');url.searchParams.set('day',this.currentContext().day);url.searchParams.set('tz',this.currentContext().zone);url.searchParams.set('undated',this.selector.undated);}if(this.selector.history)url.searchParams.set('history','1');if(this.selector.session_id)url.searchParams.set('session_id',this.selector.session_id);if(this.selector.run_id)url.searchParams.set('run_id',this.selector.run_id);if(this.selector.output_snapshot_id!==null&&this.selector.output_snapshot_id!==undefined)url.searchParams.set('output_snapshot_id',String(this.selector.output_snapshot_id));history.replaceState(null,'',url);}
   private async openDeepLink(query=new URLSearchParams(location.search)):Promise<void>{const kind=query.get('kind');const id=query.get('id');if(!id||id.length>2000||!this.objectSourceReady(query.get('provider_id')))return;if(kind==='node')await this.openNode(id);else if(kind==='edge')await this.openEdge(id);else if(kind==='topic'){const topic=this.topics?.topics.find(item=>item.id===id);if(topic)this.openTopic(topic);else this.notice('Тема недоступна в этой версии.');}}
-  private async logout():Promise<void>{clearTimeout(this.capabilityTimer);await response('/session',undefined,{method:'DELETE',headers:{'X-CSRF-Token':this.csrf}});this.graphRequest?.abort();this.cardRequest?.abort();this.searchRequest?.abort();this.stopOwnerLive();this.stream?.close();this.worker?.dispose();this.worker=null;this.sessionFilter?.clear();this.scene?.dispose();this.scene=null;this.graph=null;this.manifest=null;this.topics=null;this.capabilities=null;this.searchPage=null;this.selectedTopicId=null;this.selectedOrdinal=null;this.selectedNodeId=null;this.reader.clear();this.searchPanel.hidden=true;this.historyPanel.hidden=true;this.bookmarksPanel.hidden=true;byId('bookmarks-list',HTMLElement).replaceChildren();byId('search-list',HTMLElement).replaceChildren();byId('search',HTMLInputElement).value='';byId('undated-count',HTMLElement).textContent='';byId('notice-text',HTMLElement).textContent='';byId('notice',HTMLElement).hidden=true;byId('fixture-label',HTMLElement).hidden=true;this.counts.textContent='Вся доступная вселенная';this.setConnection('Требуется вход',false);this.csrf='';this.showLogin();}
+  private async logout():Promise<void>{clearTimeout(this.capabilityTimer);await response('/session',undefined,{method:'DELETE',headers:{'X-CSRF-Token':this.csrf}});this.graphRequest?.abort();this.cardRequest?.abort();this.searchRequest?.abort();this.stopOwnerLive();this.stream?.close();this.worker?.dispose();this.worker=null;this.sessionFilter?.clear();this.scene?.dispose();this.scene=null;this.graph=null;this.manifest=null;this.topics=null;this.capabilities=null;this.searchPage=null;this.selectedTopicId=null;this.selectedOrdinal=null;this.selectedNodeId=null;this.reader.clear();this.searchPanel.hidden=true;this.historyPanel.hidden=true;this.bookmarksPanel.hidden=true;byId('bookmarks-list',HTMLElement).replaceChildren();byId('search-list',HTMLElement).replaceChildren();byId('search',HTMLInputElement).value='';byId('undated-count',HTMLElement).textContent='';byId('notice-text',HTMLElement).textContent='';byId('notice',HTMLElement).hidden=true;byId('fixture-label',HTMLElement).hidden=true;this.counts.textContent='Вся доступная вселенная';this.setConnection('Требуется вход',false);this.csrf='';this.discardGraphWire();this.showLogin();}
 }
 new Viewer();

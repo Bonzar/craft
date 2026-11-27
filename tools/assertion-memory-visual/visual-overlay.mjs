@@ -1,6 +1,7 @@
+import {patchGraphWire} from './graph-owner-wire-overlay.mjs';
 import {readFile} from 'node:fs/promises';
 import {hash} from './store.mjs';
-const [queueHtml, queueScript, queueCss, deviceHtml, deviceScript]=await Promise.all(['queue-dashboard.html','queue-dashboard.js','queue-dashboard.css','device-enrollment.html','device-enrollment.js'].map(name=>readFile(new URL(name,import.meta.url),'utf8')));
+const [queueHtml, queueScript, queueCss, deviceHtml, deviceScript, ownerLoadingCss]=await Promise.all(['queue-dashboard.html','queue-dashboard.js','queue-dashboard.css','device-enrollment.html','device-enrollment.js','../../apps/graph_viewer/web/src/owner-startup-loading.css'].map(name=>readFile(new URL(name,import.meta.url),'utf8')));
 // The pinned bundle still owns the Connections renderer and worker.
 const TAG = /^assertion-memory-visual-v[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]{1,30})?$/;
 function once(input, from, to) {
@@ -22,7 +23,7 @@ export function patchVisual({html,script,css,releaseTag=null}) {
   const ownerQueue=once(queueHtml,'<div class="queue-items"></div>',deviceHtml+'\n    <div class="queue-items"></div>');
   html=once(html,'</body>',ownerQueue+'\n</body>');
   script+='\n'+queueScript+'\n'+deviceScript;
-  css+='\n'+queueCss;
+  css+='\n'+queueCss+'\n'+ownerLoadingCss;
   css+='\n#layout-toggle[hidden],#topics-toggle[hidden]{display:none!important}\n'+
     '.visual-release-version{position:fixed;bottom:12px;left:12px;z-index:3;background:#101728;color:#e6eafa;border:1px solid #526086;border-radius:7px;padding:5px 8px;font:12px system-ui;pointer-events:none}';
   return {html,script,css};
@@ -125,7 +126,7 @@ export function patchOwnerLive(script,rawSeed){
   replace('this.loading.hidden=!0,this.stream?.close()', 'this.loading.hidden=!0,this.stopReleaseOwnerLive(),this.stream?.close()');
   replace('this.cardRequest?.abort(),this.searchRequest?.abort(),this.stream?.close()', 'this.cardRequest?.abort(),this.searchRequest?.abort(),this.stopReleaseOwnerLive(),this.stream?.close()');
   replace('async start(){if(this.authenticated=', 'async start(){this.authenticated=');
-  replace(',!this.scene)try{'+releaseScene.split('try{')[1]+'this.capabilities=await', ';this.setConnection(`Подключаемся к live-потоку`,false);this.releaseOwnerStartupPending=true;globalThis.dispatchEvent?.(new CustomEvent(`owner-live-startup`));this.capabilities=await');
+  replace(',!this.scene)try{'+releaseScene.split('try{')[1]+'this.capabilities=await', ';this.loading.classList.add(`owner-loading-inline`);this.loading.hidden=true;this.setConnection(`Подключаемся к live-потоку`,false);this.releaseOwnerStartupPending=true;globalThis.dispatchEvent?.(new CustomEvent(`owner-live-startup`));this.capabilities=await');
   replace('this.capabilities=await releaseGraphBootStep(12000,"Источник не ответил после входа. Повторите.",signal=>hd(\'/capabilities\',ce,signal));let e=', 'try{this.capabilities=await releaseGraphBootStep(12000,"Источник не ответил после входа. Повторите.",signal=>hd(\'/capabilities\',ce,signal))}catch(e){this.releaseOwnerStartupPending=false;if(e?.status!==401){this.setConnection(`Нет live-связи · снимок`,false);globalThis.dispatchEvent?.(new CustomEvent(`owner-live-offline`));}throw e}let e=');
   replace('await this.loadGraph(),this.renderCapabilities()', 'await this.bootstrapReleaseOwnerGraph(),this.renderCapabilities()');
   replace('async changeSliceContext(e){','async changeSliceContext(e){if(this.releaseOwnerStartupPending)return false;');
@@ -138,5 +139,5 @@ export function patchOwnerLive(script,rawSeed){
   replace('this.capabilities.provider_id!==this.manifest.provider_id){this.setConnection', 'this.capabilities.provider_id!==this.manifest.provider_id){this.stopReleaseOwnerLive();this.setConnection');
   replace('if(!e.subscribe){this.setConnection','if(!e.subscribe){this.stopReleaseOwnerLive();this.setConnection');
   replace('let t=new EventSource(pd(`/events`', 'if(this.startReleaseOwnerLive())return;this.stopReleaseOwnerLive();let t=new EventSource(pd(`/events`');
-  return ownerLivePrelude()+script;
+  return ownerLivePrelude()+patchGraphWire(script,once);
 }

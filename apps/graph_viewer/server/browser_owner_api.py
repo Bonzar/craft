@@ -73,6 +73,9 @@ def validate_query(request, route, path_params):
         '/api/v1/sources/{id:path}':{'revision','context','offset','limit','focus_start','focus_end'},
         '/api/v1/overviews/{id:path}':{'revision','offset','limit'},
     }.get(path,set())
+    if path=='/api/v1/events' and 'wire' in keys:
+        allowed={'wire','epoch','revision','after','mode','at','history','undated',
+                 'session_id','run_id','output_snapshot_id'}
     if path=='/api/v1/graph/{revision}/{name}' and path_params.get('name')=='sessions':
         allowed={'query','limit','cursor'}
     if path in ('/api/v1/graph/{revision}/{kind}/{ordinal:int}',
