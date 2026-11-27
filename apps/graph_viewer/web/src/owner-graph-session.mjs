@@ -10,6 +10,7 @@ export function openOwnerGraphSession({
   startDeadline=setTimeout,clearDeadline=clearTimeout,now=()=>performance.now(),
 }){
   let closed=false,attempt=null,timer=null,failures=0,accepted=null,attemptNumber=0;
+  let resumeRejected=false;
   let initialResolve,initialReject,initialSettled=false;
   const initial=new Promise((resolve,reject)=>{initialResolve=resolve;initialReject=reject});
   function finishInitial(error){
@@ -20,7 +21,7 @@ export function openOwnerGraphSession({
   function current(signal){return !closed&&!signal.aborted;}
   async function saved(value,signal){
     if(!current(signal))return;
-    accepted=value;
+    accepted=value;resumeRejected=false;
     finishInitial();
     // Only authorized, fully accepted renderer state is eligible for storage.
     if(scope&&value.epoch===verifiedEpoch)await cache?.save(scope,value);
@@ -34,7 +35,7 @@ export function openOwnerGraphSession({
     if(closed)return;
     const ac=new AbortController();attempt=ac;const {signal}=ac;
     onState(accepted||warm?'snapshot-connecting':'connecting');
-    let rejectedApply=false,live=false,hello=false,expired=false;
+    let rejectedApply=false,rejectedDelta=false,live=false,hello=false,expired=false;
     let phase='request';
     const started=now();
     const timing={attempt:++attemptNumber,headers_ms:null,first_frame_ms:null,hello_ms:null,finished_ms:null,outcome:null};
@@ -64,10 +65,15 @@ export function openOwnerGraphSession({
         report('baseline-accepted');
         await saved(await apply(onSnapshot,value),signal);
       },
-      onDelta:async value=>saved(await apply(onDelta,value),signal),
+      onDelta:async value=>{
+        let rendered;
+        try{rendered=await apply(onDelta,value);}
+        catch(error){rejectedDelta=true;throw error;}
+        await saved(rendered,signal);
+      },
       onReset:async value=>{
         if(current(signal)){
-          accepted=null;live=false;
+          accepted=null;resumeRejected=false;live=false;
           await apply(onReset,value);
           await cache?.clear();
           if(current(signal))onState('connecting');
@@ -84,7 +90,9 @@ export function openOwnerGraphSession({
       onHeartbeat:()=>{if(current(signal)&&live&&accepted&&reader.checkpoint())onState('live');},
     });
     try{
-      await read({selector,checkpoint,signal,onHeaders:()=>{if(current(signal)){stamp('headers_ms');report('headers');}},
+      // Keep the accepted checkpoint as a local epoch/cursor fence, even
+      // when this connection must request a baseline rather than replay.
+      await read({selector,checkpoint:resumeRejected?null:checkpoint,signal,onHeaders:()=>{if(current(signal)){stamp('headers_ms');report('headers');}},
         onFirstFrame:()=>{if(current(signal))stamp('first_frame_ms');},onEvent:async(name,value)=>{
         // The wire grammar validates again inside the reconciler. Stop the
         // network timer before waiting for a slow local warm paint.
@@ -110,7 +118,8 @@ export function openOwnerGraphSession({
       // A rejected cached picture/delta is never an unbounded replay loop.
       if(rejectedApply){
         report(phase==='baseline-accepted'?'baseline-render-failed':'render-failed',true);
-        if(!accepted){accepted=null;await cache?.clear();}
+        if(rejectedDelta&&accepted)resumeRejected=true;
+        else if(!accepted){accepted=null;await cache?.clear();}
       }else if(!expired){report(hello?'stream-interrupted':'response-rejected',true);}
     }finally{
       stopDeadline();

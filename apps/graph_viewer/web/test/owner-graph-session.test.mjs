@@ -152,3 +152,28 @@ test('per-attempt transport timing keeps prior timeout distinct from next hello'
   assert.equal(JSON.stringify(trace).includes('private body'),false);
   c.close();
 });
+
+test('rejected warm delta recovers with one cold SSE while retaining the same accepted view',async()=>{
+  const reads=[],states=[],writes=[]; let retry,failures=0,hidden=0;
+  const accepted={...warm,positions:new Float32Array([1,2,3])};
+  const c=openOwnerGraphSession({selector:{mode:'current'},scope:'scope',verifiedEpoch:e,
+    cache:{take:async()=>accepted,save:async (...args)=>writes.push(args),clear:async()=>{hidden++;}},
+    onCached:async value=>{assert.equal(value,accepted);return value;},
+    onDelta:async ()=>{failures++;throw Error('synthetic renderer rejection');},
+    onReset:async()=>{hidden++;},onState:state=>states.push(state),
+    startDeadline:()=>1,clearDeadline(){},schedule:fn=>{retry=fn;return 1;},cancel(){},
+    read:async ({checkpoint,onEvent,signal})=>{
+      reads.push(checkpoint);
+      await onEvent('hello',{protocol:'graph-v1',epoch:e});
+      if(reads.length===1)await onEvent('delta',{epoch:e,revision:next,base_revision:r,cursor:'6'});
+      else await new Promise(resolve=>signal.addEventListener('abort',resolve,{once:true}));
+    }});
+  await c.initial;await settle();
+  assert.equal(failures,1);assert.equal(states.at(-1),'snapshot-offline');
+  retry();await settle();
+  assert.deepEqual(reads,[accepted,null]);
+  assert.equal(states.at(-1),'snapshot-connecting');
+  assert.equal(hidden,0);assert.deepEqual(writes,[]);
+  assert.deepEqual([...accepted.positions],[1,2,3]);
+  c.close();
+});

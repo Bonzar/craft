@@ -63,6 +63,15 @@ test('authenticated warm cache then exact graph delta on one SSE, with no camera
   });
   await page.addInitScript(()=>{
     const fetchOriginal=window.fetch;
+    const postWorker=Worker.prototype.postMessage;
+    Worker.prototype.postMessage=function(message,...args){
+      if(window.__qaRejectNextDelta&&message?.kind==='load-patch'&&message.patch?.upsert_nodes?.length){
+        window.__qaRejectNextDelta=false;
+        window.__qaRejectedDeltas=(window.__qaRejectedDeltas??0)+1;
+        throw new Error('Synthetic fixture: one worker patch rejected');
+      }
+      return postWorker.call(this,message,...args);
+    };
     window.__fixtureDocument=crypto.randomUUID();
     window.__fixtureFrames=[];
     window.__fixtureCache={reads:0,deletions:0,lastGotValue:false,lastGotView:false,sessionAuthenticated:false,
@@ -253,6 +262,34 @@ test('authenticated warm cache then exact graph delta on one SSE, with no camera
   expect(graphReq()).toEqual([]);
   await Promise.all([mainFocus.detach(),otherFocus.detach()]);
   await other.close();
+
+  // Same packaged frontend and real Graph listener, with only one worker apply
+  // artificially rejected. A resume of that cursor would replay the bad delta.
+  await page.evaluate(()=>{window.__qaRejectNextDelta=true;});
+  execFileSync(process.env.GRAPH_FIXTURE_PYTHON||'python3',['-c',[
+    'import sqlite3,sys',
+    "with sqlite3.connect('file:'+sys.argv[1]+'?mode=rw',uri=True) as c:",
+    ' assert c.execute("SELECT count(*) FROM memory_assertions").fetchone()==(7,)',
+    " c.execute('INSERT INTO memory_assertions VALUES(?,?,?,?,?,?,?,?,?)',('zz-qa-live-recovered','Synthetic retry update','actor','saved','session','2025-01-01T00:00:02+00:00','2025-01-01T00:00:02+00:00','s','{}'))",
+    " c.execute('UPDATE memory_state SET version=version+1 WHERE singleton=1')",
+  ].join('\n'),db]);
+  await page.waitForFunction(({rev,n})=>{
+    const s=window.__graphViewer?.snapshot();
+    return s?.revision&&s.revision!==rev&&s.nodeSlots===n+1&&window.__graphViewer.lodAuditData()?.revision===s.revision;
+  },{rev:returned.revision,n:returned.nodeSlots},{timeout:15000});
+  const recovered=await pose();
+  expect(await page.evaluate(()=>window.__qaRejectedDeltas)).toBe(1);
+  expect(eventReq()).toEqual([
+    {path:'/api/v1/events',wire:'graph-v1',after:true,rev:true},
+    {path:'/api/v1/events',wire:'graph-v1',after:false,rev:false},
+  ]);
+  expect(graphReq()).toEqual([]);
+  expect(recovered.doc).toBe(returned.doc);
+  expect(recovered.bits.slice(0,returned.bits.length)).toEqual(returned.bits);
+  expect(recovered.edges.slice(0,returned.edges.length)).toEqual(returned.edges);
+  recovered.camera.forEach((v,i)=>expect(v).toBeCloseTo(returned.camera[i],7));
+  await expect(status).toHaveText('Live · обновляется');
+  console.info('Browser verified real graph recovery from one rejected worker apply without scene movement');
 });
 
 test('packed queue remains visible and readable after WebGL creation fails',async({nativeBrowser:{context,page}})=>{
