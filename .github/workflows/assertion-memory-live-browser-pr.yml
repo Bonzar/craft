@@ -33,7 +33,7 @@ jobs:
           # Use the vendor Chrome path covered by Ubuntu's shipped sandbox profile.
           test -x /opt/google/chrome/chrome
           google-chrome --version
-          sudo apt-get install -y --no-install-recommends xdotool
+          sudo apt-get install -y --no-install-recommends xdotool openbox
       - name: Exercise one authenticated SSE in headed sandboxed Chrome
         run: |
           export PYTHONPATH="$GITHUB_WORKSPACE"
@@ -57,4 +57,15 @@ jobs:
           done
           [[ "$ready" == 1 ]] || { echo "::error::Disposable TLS fixture failed to start"; exit 1; }
           cd apps/graph_viewer/tests/e2e
-          xvfb-run -a npm test -- owner-live-browser.spec.js --project=desktop-chrome --headed
+          xvfb-run -a bash -e -c '
+            openbox >/dev/null 2>&1 &
+            wm_pid=$!
+            trap "kill $wm_pid 2>/dev/null || true" EXIT
+            for attempt in {1..20}; do
+              kill -0 "$wm_pid"
+              if xprop -root _NET_SUPPORTING_WM_CHECK | grep -q "window id # 0x"; then break; fi
+              sleep .1
+            done
+            xprop -root _NET_SUPPORTING_WM_CHECK | grep -q "window id # 0x"
+            npm test -- owner-live-browser.spec.js --project=desktop-chrome --headed
+          '

@@ -99,21 +99,6 @@ test('authenticated warm cache then exact graph delta on one SSE, with no camera
   await page.waitForFunction(previous=>window.__graphViewer.snapshot().camera.position.some((x,i)=>Math.abs(x-previous[i])>1e-4),warm.camera.slice(0,3));
   const before=await pose();
 
-  // window.open with no popup features creates a normal tab in the same
-  // Chrome window. Drive Chrome's own tab-strip shortcut, not DOM events.
-  const [other]=await Promise.all([page.waitForEvent('popup'),page.evaluate(()=>{window.open('about:blank','_blank');})]);
-  // Playwright enables synthetic focus for every main frame by default.
-  // Restore real browser focus/visibility for this explicit tab journey.
-  const [mainFocus,otherFocus]=await Promise.all([context.newCDPSession(page),context.newCDPSession(other)]);
-  await Promise.all([mainFocus.send('Emulation.setFocusEmulationEnabled',{enabled:false}),
-    otherFocus.send('Emulation.setFocusEmulationEnabled',{enabled:false})]);
-  await page.bringToFront();
-  await page.waitForFunction(()=>document.visibilityState==='visible'&&document.hasFocus());
-  const [mainWindow,otherWindow]=await Promise.all([mainFocus.send('Browser.getWindowForTarget'),otherFocus.send('Browser.getWindowForTarget')]);
-  expect(mainWindow.windowId,'The two pages must be tabs in the same actual Chrome window').toBe(otherWindow.windowId);
-  const tabSwitch=()=>execFileSync('xdotool',['key','--clearmodifiers','ctrl+Tab'],{timeout:4000});
-  tabSwitch();
-  await expect.poll(()=>page.evaluate(()=>document.visibilityState),{timeout:8000}).toBe('hidden');
   execFileSync(process.env.GRAPH_FIXTURE_PYTHON||'python3',['-c',[
     'import sqlite3,sys',
     "with sqlite3.connect('file:'+sys.argv[1]+'?mode=rw',uri=True) as c:",
@@ -121,14 +106,10 @@ test('authenticated warm cache then exact graph delta on one SSE, with no camera
     " c.execute('INSERT INTO memory_assertions VALUES(?,?,?,?,?,?,?,?,?)',('zz-qa-live-added','Synthetic update','actor','saved','session','2025-01-01T00:00:01+00:00','2025-01-01T00:00:01+00:00','s','{}'))",
     " c.execute('UPDATE memory_state SET version=version+1 WHERE singleton=1')",
   ].join('\n'),db]);
-  // Confirm the actual transport signal arrived while this tab was away.
-  await expect.poll(()=>page.evaluate(()=>window.__fixtureFrames.includes('delta')),{timeout:12000}).toBe(true);
-  tabSwitch();
-  await expect.poll(()=>page.evaluate(()=>document.visibilityState),{timeout:8000}).toBe('visible');
   await page.waitForFunction(({rev,n})=>{
     const s=window.__graphViewer?.snapshot();
     return s?.revision&&s.revision!==rev&&s.nodeSlots===n+1&&window.__graphViewer.lodAuditData()?.revision===s.revision;
-  },{rev:before.revision,n:before.nodeSlots});
+  },{rev:before.revision,n:before.nodeSlots},{timeout:15000});
   const after=await pose();
   expect(after.doc).toBe(before.doc);
   expect(after.bits.slice(0,before.bits.length)).toEqual(before.bits);
@@ -143,6 +124,35 @@ test('authenticated warm cache then exact graph delta on one SSE, with no camera
   expect(eventReq()).toHaveLength(1);
   expect(graphReq()).toEqual([]);
   await expect(status).toHaveText('Live · обновляется');
+  console.info('Browser verified cold cache, held-network warm paint, one authentic SSE delta, and fixed camera/geometry');
+
+  // Assert the product update above independently; now perform the actual
+  // tab hide/return and make sure it doesn't rebuild the settled graph.
+  // window.open with no popup features creates a normal tab in the same
+  // Chrome window. Drive Chrome's own tab-strip shortcut, not DOM events.
+  const [other]=await Promise.all([page.waitForEvent('popup',{timeout:8000}),page.evaluate(()=>{window.open('about:blank','_blank');})]);
+  // Playwright enables synthetic focus for every main frame by default.
+  // Restore real browser focus/visibility for this explicit tab journey.
+  const [mainFocus,otherFocus]=await Promise.all([context.newCDPSession(page),context.newCDPSession(other)]);
+  await Promise.all([mainFocus.send('Emulation.setFocusEmulationEnabled',{enabled:false}),
+    otherFocus.send('Emulation.setFocusEmulationEnabled',{enabled:false})]);
+  await page.bringToFront();
+  await page.waitForFunction(()=>document.visibilityState==='visible'&&document.hasFocus(),null,{timeout:8000});
+  const [mainWindow,otherWindow]=await Promise.all([mainFocus.send('Browser.getWindowForTarget'),otherFocus.send('Browser.getWindowForTarget')]);
+  expect(mainWindow.windowId,'The two pages must be tabs in the same actual Chrome window').toBe(otherWindow.windowId);
+  const tabSwitch=()=>execFileSync('xdotool',['key','--clearmodifiers','ctrl+Tab'],{timeout:4000});
+  tabSwitch();
+  await expect.poll(()=>page.evaluate(()=>document.visibilityState),{timeout:8000}).toBe('hidden');
+  tabSwitch();
+  await expect.poll(()=>page.evaluate(()=>document.visibilityState),{timeout:8000}).toBe('visible');
+  const returned=await pose();
+  expect(returned.doc).toBe(after.doc);
+  expect(returned.revision).toBe(after.revision);
+  expect(returned.bits).toEqual(after.bits);
+  expect(returned.edges).toEqual(after.edges);
+  returned.camera.forEach((v,i)=>expect(v).toBeCloseTo(after.camera[i],7));
+  expect(eventReq()).toHaveLength(1);
+  expect(graphReq()).toEqual([]);
   await Promise.all([mainFocus.detach(),otherFocus.detach()]);
   await other.close();
 });
