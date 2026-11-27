@@ -94,6 +94,8 @@ class Checkpoints:
                     'Actual TEST is not the candidate selected for PROD')
             receipt_attempt=None
             if self.native_attempt_required:
+                if callable(verified_receipt):
+                    verified_receipt=verified_receipt(artifact)
                 require(type(verified_receipt) is NativeTestReceipt and verified_receipt.artifact==artifact
                         and verified_receipt.generation==test.generation
                         and type(verified_receipt.attempt_id) is str,

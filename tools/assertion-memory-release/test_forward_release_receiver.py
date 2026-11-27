@@ -157,3 +157,6 @@ class ProcessRace(unittest.TestCase):
 
 # Include native attempt fencing in the existing PR contract job.
 from test_forward_release_native_attempt import NativeFence  # noqa: E402,F401
+
+# Include Base native journal/receiver join in normal contract CI.
+from test_base_forward_native import BaseReceiverJoin  # noqa: E402,F401
