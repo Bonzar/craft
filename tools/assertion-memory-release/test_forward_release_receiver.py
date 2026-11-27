@@ -154,3 +154,6 @@ class ProcessRace(unittest.TestCase):
                     child.join()
                 reader.close()
             self.assertEqual(child.exitcode,0)
+
+# Include native attempt fencing in the existing PR contract job.
+from test_forward_release_native_attempt import NativeFence  # noqa: E402,F401

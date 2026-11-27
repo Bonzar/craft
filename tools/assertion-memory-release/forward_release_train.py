@@ -55,6 +55,7 @@ class Witness:
     artifact: Artifact
     generation: str
     observed_at: int
+    native_attempt: str | None = None
 
 
 @dataclass(frozen=True)
@@ -121,7 +122,15 @@ class Ledger:
             return tested is None and outcome.rowcount==1
         return self._write(begin)
 
-    def continue_unentered_test(self, artifact, recovered):
+    def exact_attempt_id(self, artifact):
+        """Read the authority-issued token; callers hold the component lock."""
+        artifact.checked()
+        row=self.db.execute('''SELECT attempt_id FROM forward_test_attempt WHERE
+            (family,tag,revision,release_id,digest)=(?,?,?,?,?)''',self._attempt_identity(artifact)).fetchone()
+        require(row is not None and re.fullmatch('[0-9a-f]{64}',row[0]), 'Missing native TEST attempt identity')
+        return row[0]
+
+    def continue_unentered_test(self, artifact, recovered, *, new_native_attempt=False):
         """Consume one independently approved exact recovery by compare-and-swap.
 
         Baseline observation, an absent activation journal, a timeout, and
@@ -138,14 +147,15 @@ class Ledger:
             _,_,current,pin,tested,promoting=self._read(c.family)
             require(not promoting and tested is None and current==c and pin==(artifact.release_id,artifact.digest),
                     'Only the still-current pending TEST candidate is recoverable')
-            changed=self.db.execute('''UPDATE forward_test_attempt SET continued=1,recovery_decision_id=? WHERE
+            changed=self.db.execute('''UPDATE forward_test_attempt SET continued=1,recovery_decision_id=?,attempt_id=? WHERE
                 (family,tag,revision,release_id,digest)=(?,?,?,?,?) AND attempt_id=?
                 AND continued=0 AND generation IS NULL''',
-                (recovered.decision_id,*self._attempt_identity(artifact),recovered.attempt_id))
+                (recovered.decision_id,secrets.token_hex(32) if new_native_attempt else recovered.attempt_id,
+                 *self._attempt_identity(artifact),recovered.attempt_id))
             require(changed.rowcount==1,'TEST recovery proof stale, consumed, or unknown')
         self._write(consume)
 
-    def reconcile_test_activation(self, artifact, observed):
+    def reconcile_test_activation(self, artifact, observed, *, fence_native=False):
         """Only fresh protected actual-service evidence may close an exact attempt."""
         self._witness(observed,'test')
         require(observed.artifact==artifact, 'Actual TEST did not prove exact attempted artifact')
@@ -155,6 +165,9 @@ class Ledger:
             require(not promoting and current==c and pin==(artifact.release_id,artifact.digest),
                     'Test attempt was superseded or already promoting')
             identity=self._attempt_identity(artifact)
+            if fence_native:
+                require(observed.native_attempt==self.exact_attempt_id(artifact),
+                        'Actual native TEST attempt differs from the reserved attempt')
             row=self.db.execute('''SELECT generation FROM forward_test_attempt WHERE
                 (family,tag,revision,release_id,digest)=(?,?,?,?,?)''',identity).fetchone()
             require(row is not None and row[0] in (None,observed.generation)
@@ -283,12 +296,16 @@ class Ledger:
                                 (c.tag,c.revision,a.release_id,a.digest,w.generation,c.family))
         return self._write(write)
 
-    def begin_promotion(self, test):
+    def begin_promotion(self, test, *, receipt_attempt=None):
         self._witness(test, 'test')
         a,c = test.artifact,test.artifact.candidate
         def read():
             _,_,current,pin,tested,promoting = self._read(c.family)
             require(not promoting and current == c and pin == (a.release_id,a.digest) and tested == test.generation,
                     'Promotion needs current exact TEST-verified artifact')
+            if receipt_attempt is not None:
+                require(type(receipt_attempt) is str and re.fullmatch('[0-9a-f]{64}',receipt_attempt)
+                        and test.native_attempt==receipt_attempt==self.exact_attempt_id(a),
+                        'Superseded or unbound native TEST receipt')
             self.db.execute('UPDATE forward_train SET promotion_pending=1 WHERE family=?',(c.family,))
         return self._write(read)

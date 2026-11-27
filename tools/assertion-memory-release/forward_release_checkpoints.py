@@ -28,6 +28,8 @@ class Checkpoints:
     payload. Disconnection/uncertain outcome requires actual state reconciliation;
     no effect is repeated here.
     """
+    native_attempt_required = False
+
     def __init__(self, ledger: Ledger, lock: Callable):
         self.ledger = ledger
         self.lock = lock
@@ -50,13 +52,14 @@ class Checkpoints:
                 fix = verify_fix(artifact) if minor != 0 else None
                 self.ledger.reserve(c, live, fix=fix, artifact=artifact)
             if self.ledger.begin_test_activation(artifact):
-                w=activate_and_probe(artifact)
+                w=(activate_and_probe(artifact,self.ledger.exact_attempt_id(artifact))
+                   if self.native_attempt_required else activate_and_probe(artifact))
             else:
                 require(callable(observe_test), 'Previous TEST attempt needs independent reconciliation')
                 w=observe_test(artifact)
             require(type(w) is Witness and w.artifact == artifact and w.stage == 'test',
                     'TEST service did not prove exact activation')
-            self.ledger.reconcile_test_activation(artifact,w)
+            self.ledger.reconcile_test_activation(artifact,w,fence_native=self.native_attempt_required)
             return w
 
     def recover_test(self, artifact, *, verified_release, observe_test, verify_recovery, activate_and_probe):
@@ -68,18 +71,19 @@ class Checkpoints:
             require(p.release_id==artifact.release_id,'Wrong immutable recovery release')
             actual=observe_test(artifact)
             if type(actual) is Witness and actual.artifact==artifact:
-                self.ledger.reconcile_test_activation(artifact,actual)
+                self.ledger.reconcile_test_activation(artifact,actual,fence_native=self.native_attempt_required)
                 return actual
             # The installed verifier is responsible for validating independent
             # non-entry evidence or the explicitly scoped protected decision.
             # Unknown observed state cannot auto-continue.
             recovered=verify_recovery(artifact,actual)
-            self.ledger.continue_unentered_test(artifact,recovered)
-            new=activate_and_probe(artifact)
-            self.ledger.reconcile_test_activation(artifact,new)
+            self.ledger.continue_unentered_test(artifact,recovered,new_native_attempt=self.native_attempt_required)
+            new=(activate_and_probe(artifact,self.ledger.exact_attempt_id(artifact))
+                 if self.native_attempt_required else activate_and_probe(artifact))
+            self.ledger.reconcile_test_activation(artifact,new,fence_native=self.native_attempt_required)
             return new
 
-    def production(self, artifact: Artifact, *, verified_release, actual_test, approve, activate_and_probe):
+    def production(self, artifact: Artifact, *, verified_release, actual_test, approve, activate_and_probe, verified_receipt=None):
         c = artifact.candidate
         with self.lock(c.family):
             p = self._published(verified_release(artifact.release_id), c)
@@ -88,7 +92,14 @@ class Checkpoints:
             test = actual_test(artifact)
             require(type(test) is Witness and test.artifact == artifact and test.stage == 'test',
                     'Actual TEST is not the candidate selected for PROD')
-            self.ledger.begin_promotion(test)
+            receipt_attempt=None
+            if self.native_attempt_required:
+                require(type(verified_receipt) is NativeTestReceipt and verified_receipt.artifact==artifact
+                        and verified_receipt.generation==test.generation
+                        and type(verified_receipt.attempt_id) is str,
+                        'Exact authenticated TEST receipt with native attempt is required')
+                receipt_attempt=verified_receipt.attempt_id
+            self.ledger.begin_promotion(test,receipt_attempt=receipt_attempt)
             w = activate_and_probe(artifact)
             require(type(w) is Witness and w.artifact == artifact and w.stage == 'prod',
                     'PROD service did not prove exact activation')
@@ -106,3 +117,16 @@ class Checkpoints:
                     'Only exact supervised old releases can bypass forward controls')
             # No forward reservation or witness even when PROD smoke succeeds.
             return perform_and_probe(permit)
+
+
+@dataclass(frozen=True)
+class NativeTestReceipt:
+    """Construct only after authenticating the selected TEST receipt and native origin."""
+    artifact: Artifact
+    generation: str
+    attempt_id: str
+
+
+class NativeAttemptCheckpoints(Checkpoints):
+    """Explicit trusted native adapter; not installed by existing deployment paths."""
+    native_attempt_required = True

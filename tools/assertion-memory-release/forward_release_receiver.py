@@ -50,7 +50,7 @@ class FamilyLocks:
 
 def activate_forward(checkpoints, req, *, receiver_stage, verify_dispatch, verify_release,
                      active_test, verify_promote_approval, activate_and_probe,
-                     live_prod=None, verify_fix=None):
+                     live_prod=None, verify_fix=None, verified_test_receipt=None):
     if (type(req) is not Request or req.stage not in ('test','prod')
             or req.stage != receiver_stage or type(req.artifact) is not Artifact):
         raise Reject('Receiver stage or artifact mismatch')
@@ -81,12 +81,14 @@ def activate_forward(checkpoints, req, *, receiver_stage, verify_dispatch, verif
         return checkpoints.test(a, verified_release=authorize_test, activate_and_probe=activate_and_probe,
                                 live_prod=live_prod, verify_fix=verify_fix,observe_test=active_test)
     return checkpoints.production(a, verified_release=verify_release, actual_test=read_exact_test,
-                                  approve=verify_promote_approval, activate_and_probe=activate_and_probe)
+                                  approve=verify_promote_approval, activate_and_probe=activate_and_probe,
+                                  verified_receipt=verified_test_receipt)
 
 
 def protected_activation(checkpoints, req, *, receiver_stage, verify_dispatch,
                          verify_release, identify_prepared, probe, active_test=None,
-                         verify_promote_approval=None, live_prod=None, verify_fix=None):
+                         verify_promote_approval=None, live_prod=None, verify_fix=None,
+                         bind_native_attempt=None, verified_test_receipt=None):
     """Join authenticated receive to release_core/runtime_joint pre-switch hook.
 
     identify_prepared and probe must be independently configured by the pinned
@@ -97,13 +99,24 @@ def protected_activation(checkpoints, req, *, receiver_stage, verify_dispatch,
     def authorize(prepared, switch):
         if type(req) is not Request or identify_prepared(prepared) != req.artifact:
             raise Reject('Prepared release differs from authenticated request')
+        if checkpoints.native_attempt_required and receiver_stage=='test':
+            require(callable(bind_native_attempt),'Native TEST attempt recorder unavailable')
 
-        def activate_and_probe(artifact):
-            switch()  # preserve native prepare/restart/smoke/recovery code
+        def activate_and_probe(artifact, attempt_id=None):
+            if checkpoints.native_attempt_required and receiver_stage=='test':
+                require(callable(bind_native_attempt) and attempt_id is not None,
+                        'Native TEST attempt recorder unavailable')
+                # Installed root-owned recorder must cover the actual native
+                # journal and witness hooks, not just decorate probe output.
+                with bind_native_attempt(prepared,attempt_id):
+                    switch()
+            else:
+                switch()
             return probe(receiver_stage, artifact)
 
         return activate_forward(checkpoints,req,receiver_stage=receiver_stage,
                  verify_dispatch=verify_dispatch,verify_release=verify_release,
                  active_test=active_test,verify_promote_approval=verify_promote_approval,
-                 activate_and_probe=activate_and_probe,live_prod=live_prod,verify_fix=verify_fix)
+                 activate_and_probe=activate_and_probe,live_prod=live_prod,verify_fix=verify_fix,
+                 verified_test_receipt=verified_test_receipt)
     return authorize
