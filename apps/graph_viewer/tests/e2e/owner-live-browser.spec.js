@@ -65,9 +65,46 @@ test('authenticated warm cache then exact graph delta on one SSE, with no camera
     const fetchOriginal=window.fetch;
     window.__fixtureDocument=crypto.randomUUID();
     window.__fixtureFrames=[];
+    window.__fixtureCache={reads:0,deletions:0,lastGotValue:false,lastGotView:false,sessionAuthenticated:false,
+      sessionScopeShape:false,sessionEpochShape:false,authMatchesStored:false};
+    let storedScope,storedEpoch,sessionScope,sessionEpoch;
+    function recordMatch(){
+      if(!storedScope||!sessionScope||!storedEpoch||!sessionEpoch)return;
+      const [format,origin,owner]=JSON.parse(storedScope);
+      window.__fixtureCache.authMatchesStored=format===1&&origin===location.origin&&owner===sessionScope&&storedEpoch===sessionEpoch;
+    }
+    const get=IDBObjectStore.prototype.get;
+    IDBObjectStore.prototype.get=function(key){
+      const result=get.apply(this,arguments);
+      if(this.transaction.db.name==='private-owner-graph-topology-v1'&&this.name==='checkpoint'&&key==='latest'){
+        window.__fixtureCache.reads++;
+        result.addEventListener('success',()=>{
+          const item=result.result;
+          window.__fixtureCache.lastGotValue=Boolean(item);
+          window.__fixtureCache.lastGotView=Boolean(item?.value?.view);
+          storedScope=item?.scope;storedEpoch=item?.value?.epoch;
+          recordMatch();
+        });
+      }
+      return result;
+    };
+    const remove=IDBObjectStore.prototype.delete;
+    IDBObjectStore.prototype.delete=function(key){
+      if(this.transaction.db.name==='private-owner-graph-topology-v1'&&this.name==='checkpoint'&&key==='latest')window.__fixtureCache.deletions++;
+      return remove.apply(this,arguments);
+    };
     window.fetch=function(input,...args){
       const url=new URL(input instanceof Request?input.url:input,location.href);
       const answer=fetchOriginal.call(this,input,...args);
+      if(url.origin===location.origin&&url.pathname==='/api/v1/session'&&(args[0]?.method??'GET')==='GET'){
+        void answer.then(r=>r.clone().json()).then(result=>{
+          window.__fixtureCache.sessionAuthenticated=result.authenticated===true;
+          sessionScope=result.graph_cache_scope;sessionEpoch=result.graph_cache_epoch;
+          window.__fixtureCache.sessionScopeShape=/^[a-f0-9]{64}$/.test(sessionScope);
+          window.__fixtureCache.sessionEpochShape=/^[a-f0-9]{64}$/.test(sessionEpoch);
+          recordMatch();
+        }).catch(()=>{});
+      }
       if(url.origin!==location.origin||url.pathname!=='/api/v1/events'||url.searchParams.get('wire')!=='graph-v1'
           ||window.name!=='hold-qa-warm')return answer;
       return Promise.all([answer,new Promise(resolve=>{window.__fixtureRelease=resolve;})]).then(([response])=>{
@@ -88,7 +125,7 @@ test('authenticated warm cache then exact graph delta on one SSE, with no camera
     };
   });
   const requests=[];
-  page.on('request',r=>{
+  context.on('request',r=>{
     const u=new URL(r.url());
     if(u.origin===origin)requests.push({path:u.pathname,wire:u.searchParams.get('wire'),
       after:u.searchParams.has('after'),rev:u.searchParams.has('revision')});
@@ -104,13 +141,27 @@ test('authenticated warm cache then exact graph delta on one SSE, with no camera
       edges:Array.from(data.source_edges)};
   });
 
-  await page.goto(origin);
+  const packed=process.env.GRAPH_BROWSER_VARIANT==='packed';
+  await page.goto(origin+(packed?'/visual/':''));
+  if(packed){
+    const release=page.locator('.visual-release-version');
+    await expect(release).toHaveText('Визуал: assertion-memory-visual-v0.0.0-browser-fixture');
+    await expect(release).toHaveCSS('position','fixed');
+    await expect(page.locator('#visual-queue-open')).toBeHidden();
+  }
   expect(await page.evaluate(()=>Boolean(document.createElement('canvas').getContext('webgl2'))),
     'Installed sandboxed browser must supply WebGL2').toBe(true);
   await page.locator('#password').fill('synthetic-only-owner');
   await page.locator('#login-button').click();
   await expect(status).toHaveText('Live · обновляется');
   await waitGraph();
+  await expect(page.locator('#space')).toBeVisible();
+  if(packed){
+    expect(requests.some(r=>/^\/visual\/assets\/index-[\w-]+\.js$/.test(r.path))).toBe(true);
+    expect(requests.some(r=>/^\/visual\/assets\/index-[\w-]+\.css$/.test(r.path))).toBe(true);
+    expect(requests.some(r=>/^\/visual\/assets\/graph\.worker-[\w-]+\.js$/.test(r.path))).toBe(true);
+  }
+  if(packed)await expect(page.locator('#visual-queue-open')).toBeVisible();
   const cold=await pose();
   expect(eventReq()).toEqual([{path:'/api/v1/events',wire:'graph-v1',after:false,rev:false}]);
   expect(graphReq()).toEqual([]);
@@ -132,7 +183,11 @@ test('authenticated warm cache then exact graph delta on one SSE, with no camera
   requests.length=0;
   await page.reload();
   await page.waitForFunction(()=>typeof window.__fixtureRelease==='function',null,{timeout:10000});
-  expect(eventReq()).toEqual([{path:'/api/v1/events',wire:'graph-v1',after:true,rev:true}]);
+  const resumeAttempt=eventReq();
+  if(packed&&resumeAttempt[0]?.after!==true){
+    console.info('Packed warm checkpoint diagnostic '+JSON.stringify(await page.evaluate(()=>window.__fixtureCache)));
+  }
+  expect(resumeAttempt).toEqual([{path:'/api/v1/events',wire:'graph-v1',after:true,rev:true}]);
   await expect(status).toHaveText('Снимок · подключаемся к Live');
   await waitGraph();
   const warm=await pose();
@@ -198,4 +253,39 @@ test('authenticated warm cache then exact graph delta on one SSE, with no camera
   expect(graphReq()).toEqual([]);
   await Promise.all([mainFocus.detach(),otherFocus.detach()]);
   await other.close();
+});
+
+test('packed queue remains visible and readable after WebGL creation fails',async({nativeBrowser:{context,page}})=>{
+  test.skip(process.env.GRAPH_BROWSER_VARIANT!=='packed','queue overlay is present only in the packaged release');
+  const base=realpathSync(process.env.GRAPH_BROWSER_FIXTURE);
+  const origin='https://127.0.0.1:'+Number(readFileSync(join(base,'fixture-port'),'utf8'));
+  await context.route('**/*',route=>{
+    const u=new URL(route.request().url());
+    return u.origin===origin||['about:','blob:','data:'].includes(u.protocol)?route.continue():route.abort();
+  });
+  await page.addInitScript(()=>{
+    const original=HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.getContext=function(type,...args){
+      return type==='webgl2'?null:original.call(this,type,...args);
+    };
+  });
+  const graph=[],wire=[],queue=[];
+  page.on('request',request=>{
+    const url=new URL(request.url());
+    if(url.origin!==origin)return;
+    if(url.pathname==='/api/v1/graph'||url.pathname.startsWith('/api/v1/graph/'))graph.push(url.pathname);
+    if(url.pathname==='/api/v1/events'&&url.searchParams.get('wire')==='graph-v1')wire.push(url.pathname);
+    if(url.pathname==='/api/v1/capabilities'&&url.searchParams.get('queue_status')==='1')queue.push(url.pathname);
+  });
+  await page.goto(origin+'/visual/');
+  const login=page.locator('#password');
+  await login.fill('synthetic-only-owner');
+  await page.locator('#login-button').click();
+  await expect(page.locator('html')).toHaveAttribute('data-owner-graph-failure','baseline-render-failed');
+  await page.locator('#visual-queue-open').click();
+  await expect(page.locator('#visual-queue')).toBeVisible();
+  await expect(page.locator('#visual-queue .queue-meta')).toHaveText('TEST · База fixture-base');
+  expect(queue.length).toBeGreaterThan(0);
+  expect(wire.length).toBeGreaterThan(0);
+  expect(graph).toEqual([]);
 });
