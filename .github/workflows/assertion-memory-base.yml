@@ -105,6 +105,11 @@ jobs:
           python tools/assertion-memory-release/test_adopt_live_base_test.py
           python -m unittest discover -s tools/assertion-memory-qa/vm -p test_receiver.py
           PYTHONPATH=tools/assertion-memory-release python -m unittest discover -s tools/assertion-memory-qa/prod-bridge
+      - name: Verify optional Graph removal and device registry in isolated fixtures
+        run: |
+          export PYTHONPATH="$PWD:$PWD/tools/assertion-memory-hosted-mcp:$PWD/tools/assertion-memory-release"
+          python3 -B tools/assertion-memory-qa/test_optional_owner_features.py graph-node-removal
+          python3 -B tools/assertion-memory-qa/test_optional_owner_features.py device-registry
       - name: Build narrow, data-free release
         run: tools/assertion-memory-qa/build-release.sh "$RUNNER_TEMP/qa-release"
       - if: github.event_name == 'release'
