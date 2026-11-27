@@ -12,5 +12,6 @@ export function openOwnerGraphSession(options:{selector:Selector;scope?:string|n
   onSnapshot:(value:OwnerGraphBaseline,signal:AbortSignal)=>Promise<OwnerGraphStored>;
   onDelta:(value:OwnerGraphEvent,signal:AbortSignal)=>Promise<OwnerGraphStored>;
   onReset:(value:{epoch:string,reason:string},signal:AbortSignal)=>void|Promise<void>;
+  onAttempt?:(timing:{attempt:number;headers_ms:number|null;first_frame_ms:number|null;hello_ms:number|null;finished_ms:number|null;outcome:string|null})=>void;
   onDiagnostic?:(phase:string,failure:boolean)=>void;
   onState?:(state:'connecting'|'snapshot-connecting'|'snapshot-offline'|'offline'|'live'|'unauthorized')=>void;}):OwnerGraphSession;

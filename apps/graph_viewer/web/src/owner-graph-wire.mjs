@@ -13,7 +13,7 @@ const has=(object,keys)=>object!==null&&typeof object==='object'&&!Array.isArray
 const isStamp=v=>typeof v?.epoch==='string'&&EPOCH.test(v.epoch)&&typeof v.revision==='string'&&REV.test(v.revision)&&typeof v.cursor==='string'&&CURSOR.test(v.cursor);
 const cursorLess=(a,b)=>BigInt(a)<BigInt(b);
 
-export async function readOwnerGraphWire({selector,checkpoint=null,fetcher=fetch,signal,onEvent,onHeaders}){
+export async function readOwnerGraphWire({selector,checkpoint=null,fetcher=fetch,signal,onEvent,onHeaders,onFirstFrame}){
   const q=new URLSearchParams({wire:'graph-v1'});
   for(const k of ['mode','at','history','undated','session_id','run_id','output_snapshot_id']){
     const value=selector[k];if(value===null||value===undefined)continue;
@@ -25,19 +25,20 @@ export async function readOwnerGraphWire({selector,checkpoint=null,fetcher=fetch
   }
   const response=await fetcher('/api/v1/events?'+q,{method:'GET',credentials:'same-origin',
     redirect:'error',cache:'no-store',headers:{Accept:'text/event-stream'},signal});
+  onHeaders?.();
   if(!response.ok||!/^text\/event-stream(?:;|$)/i.test(response.headers.get('Content-Type')??'')||!response.body){
     const error=new Error('Graph Live: invalid response');error.status=response.status;throw error;
   }
-  onHeaders?.();
   const decoder=new TextDecoder('utf-8',{fatal:true});
   const reader=response.body.getReader();
-  let pending='';
+  let pending='',firstFrame=false;
   try {
     while(!signal?.aborted){
       const chunk=await reader.read();if(chunk.done)break;
       pending+=decoder.decode(chunk.value,{stream:true});
       let match;
       while((match=/\r?\n\r?\n/.exec(pending))){
+        if(!firstFrame){firstFrame=true;onFirstFrame?.();}
         if(match.index>FRAME)fail('frame bound exceeded');
         const frame=pending.slice(0,match.index);pending=pending.slice(match.index+match[0].length);
         const fields=/^event: ([a-z-]+)\r?\ndata: (\{[^\r\n]*\})$/.exec(frame);
