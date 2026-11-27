@@ -1,0 +1,39 @@
+# REVIEW SPECIMEN ONLY. Deliberately outside .github/workflows. Not deployable.
+# Pin the control checkout and preloaded image from reviewed current policy
+# before any actual run. Never use an old tag's workflow definition.
+name: Isolated historical Base build rehearsal
+on:
+  workflow_dispatch:
+    inputs:
+      tag: {type: string, required: true}
+permissions: {}
+jobs:
+  rehearsal:
+    if: github.repository == 'Bonzar/craft' && github.ref == 'refs/heads/main' && github.ref_protected && github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      # No GitHub environment gate or secrets on historical code; the current
+      # protected control first resolves immutable Release by ID/tag and verifies
+      # main ancestry + exact tuple compatibility against its reviewed table.
+      # The isolated runner must already have the digest-pinned image loaded
+      # containing Node 24, Python 3.12, locked wheels and offline npm cache
+      # for this exact approved source; image preparation/attestation is not
+      # implemented. Do not pass an arbitrary caller-selected image or path.
+      # After a future trusted resolver sets approved_sha/approved_image:
+      #
+      # git archive --format=tar "$approved_sha" -- apps/graph_viewer prototypes/assertion_memory > "$RUNNER_TEMP/old-source.tar"
+      # tools/assertion-memory-release/rollback-rebuild-base-isolated.sh "$approved_image" "$RUNNER_TEMP/old-source.tar" "$RUNNER_TEMP/compiled" "$approved_sha"
+      #
+      # Trusted assembler on a fresh no-candidate-code runner uses only the
+      # parser-qualified generated outputs and authoritative Git objects.
+      # No signing, upload, release publication, TEST, or PROD in this specimen.
+      - name: Stop until trusted history resolver and offline image are wired
+        run: exit 1
