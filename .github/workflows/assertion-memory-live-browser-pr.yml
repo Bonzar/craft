@@ -5,6 +5,7 @@ on:
     paths:
       - ".github/workflows/assertion-memory-live-browser-pr.yml"
       - "apps/graph_viewer/**"
+      - "tools/assertion-memory-visual/**"
 permissions: {}
 jobs:
   live-browser:
@@ -37,35 +38,49 @@ jobs:
       - name: Exercise one authenticated SSE in headed sandboxed Chrome
         run: |
           export PYTHONPATH="$GITHUB_WORKSPACE"
-          export GRAPH_BROWSER_FIXTURE="$RUNNER_TEMP/owner-live-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
-          python -B apps/graph_viewer/tests/e2e/owner-live-browser-fixture.py \
-            "$GRAPH_BROWSER_FIXTURE" "$GITHUB_WORKSPACE/apps/graph_viewer/web/dist" &
-          fixture_pid=$!
-          trap 'kill "$fixture_pid" 2>/dev/null || true; wait "$fixture_pid" 2>/dev/null || true' EXIT
-          ready=0
-          for attempt in {1..40}; do
-            kill -0 "$fixture_pid"
-            if [[ -s "$GRAPH_BROWSER_FIXTURE/fixture-port" ]]; then
-              read -r port < <(cat "$GRAPH_BROWSER_FIXTURE/fixture-port"; printf '\n')
-              if [[ "$port" =~ ^[0-9]{4,5}$ ]] && curl --noproxy '*' --cacert "$GRAPH_BROWSER_FIXTURE/cert" \
-                --fail --silent --max-time 1 "https://127.0.0.1:${port}/api/v1/health" >/dev/null; then
-                ready=1
-                break
-              fi
+          check_visual() (
+            export GRAPH_BROWSER_VARIANT="$1"
+            export GRAPH_BROWSER_FIXTURE="$RUNNER_TEMP/owner-live-$GRAPH_BROWSER_VARIANT-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+            assets="$GITHUB_WORKSPACE/apps/graph_viewer/web/dist"
+            if [[ "$GRAPH_BROWSER_VARIANT" == packed ]]; then
+              assets="$RUNNER_TEMP/packed-visual"
+              mkdir -m 700 "$assets"
+              tag=assertion-memory-visual-v0.0.0-browser-fixture
+              GITHUB_EVENT_NAME=release GITHUB_REF_NAME="$tag" GITHUB_REF="refs/tags/$tag" \
+                node tools/assertion-memory-visual/build-archive.mjs tools/assertion-memory-visual "$RUNNER_TEMP/visual.tar"
+              tar --no-same-owner -xf "$RUNNER_TEMP/visual.tar" -C "$assets"
             fi
-            sleep .5
-          done
-          [[ "$ready" == 1 ]] || { echo "::error::Disposable TLS fixture failed to start"; exit 1; }
-          cd apps/graph_viewer/tests/e2e
-          xvfb-run -a bash -e -c '
-            openbox >/dev/null 2>&1 &
-            wm_pid=$!
-            trap "kill $wm_pid 2>/dev/null || true" EXIT
-            for attempt in {1..20}; do
-              kill -0 "$wm_pid"
-              if xprop -root _NET_SUPPORTING_WM_CHECK | grep -q "window id # 0x"; then break; fi
-              sleep .1
+            python -B apps/graph_viewer/tests/e2e/owner-live-browser-fixture.py \
+              "$GRAPH_BROWSER_FIXTURE" "$assets" "$GRAPH_BROWSER_VARIANT" &
+            fixture_pid=$!
+            trap 'kill "$fixture_pid" 2>/dev/null || true; wait "$fixture_pid" 2>/dev/null || true' EXIT
+            ready=0
+            for attempt in {1..40}; do
+              kill -0 "$fixture_pid"
+              if [[ -s "$GRAPH_BROWSER_FIXTURE/fixture-port" ]]; then
+                read -r port < <(cat "$GRAPH_BROWSER_FIXTURE/fixture-port"; printf '\n')
+                if [[ "$port" =~ ^[0-9]{4,5}$ ]] && curl --noproxy '*' --cacert "$GRAPH_BROWSER_FIXTURE/cert" \
+                  --fail --silent --max-time 1 "https://127.0.0.1:${port}/api/v1/health" >/dev/null; then
+                  ready=1
+                  break
+                fi
+              fi
+              sleep .5
             done
-            xprop -root _NET_SUPPORTING_WM_CHECK | grep -q "window id # 0x"
-            npm test -- owner-live-browser.spec.js --project=desktop-chrome --headed
-          '
+            [[ "$ready" == 1 ]] || { echo "::error::Disposable TLS fixture failed to start"; exit 1; }
+            cd "$GITHUB_WORKSPACE/apps/graph_viewer/tests/e2e"
+            xvfb-run -a bash -e -c '
+              openbox >/dev/null 2>&1 &
+              wm_pid=$!
+              trap "kill $wm_pid 2>/dev/null || true" EXIT
+              for attempt in {1..20}; do
+                kill -0 "$wm_pid"
+                if xprop -root _NET_SUPPORTING_WM_CHECK | grep -q "window id # 0x"; then break; fi
+                sleep .1
+              done
+              xprop -root _NET_SUPPORTING_WM_CHECK | grep -q "window id # 0x"
+              npm test -- owner-live-browser.spec.js --project=desktop-chrome --headed
+            '
+          )
+          check_visual native
+          check_visual packed
