@@ -23,3 +23,9 @@ removes only the exact marker and keeps the stage registry and audit data.
 Use the existing same-origin REST carrier unchanged; require independent
 read-only proof that it preserves the owner cookie, Origin, body and CSRF.
 Fixtures contain no actual accounts, credentials, production paths or data.
+
+The optional feature-permit v1 is domain separated from deployed release proof
+and independently binds TEST, graph versus devices, apply versus inverse,
+protected run, expiry and both exact request and candidate digests. It requires
+an existing, separately configured trusted verifier; no verifier is wired by
+these files. Only the guarded transaction may claim a permit before effects.
