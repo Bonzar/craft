@@ -5,11 +5,11 @@ const FIRST_HELLO_MS=8000;
 // One active data connection per graph view. The cached frame may paint as
 // the request starts, but fresh frames are applied strictly after that paint.
 export function openOwnerGraphSession({
-  selector,scope=null,verifiedEpoch=null,cache,onCached,onSnapshot,onDelta,onReset,onState=()=>{},onDiagnostic=()=>{},
+  selector,scope=null,verifiedEpoch=null,cache,onCached,onSnapshot,onDelta,onReset,onState=()=>{},onDiagnostic=()=>{},onAttempt=()=>{},
   read=readOwnerGraphWire,schedule=setTimeout,cancel=clearTimeout,
-  startDeadline=setTimeout,clearDeadline=clearTimeout,
+  startDeadline=setTimeout,clearDeadline=clearTimeout,now=()=>performance.now(),
 }){
-  let closed=false,attempt=null,timer=null,failures=0,accepted=null;
+  let closed=false,attempt=null,timer=null,failures=0,accepted=null,attemptNumber=0;
   let initialResolve,initialReject,initialSettled=false;
   const initial=new Promise((resolve,reject)=>{initialResolve=resolve;initialReject=reject});
   function finishInitial(error){
@@ -36,6 +36,12 @@ export function openOwnerGraphSession({
     onState(accepted||warm?'snapshot-connecting':'connecting');
     let rejectedApply=false,live=false,hello=false,expired=false;
     let phase='request';
+    const started=now();
+    const timing={attempt:++attemptNumber,headers_ms:null,first_frame_ms:null,hello_ms:null,finished_ms:null,outcome:null};
+    const publish=()=>onAttempt({...timing});
+    const stamp=(field)=>{if(timing[field]===null){timing[field]=Math.round(Math.max(0,now()-started));publish();}};
+    const finishTiming=(outcome)=>{timing.outcome=outcome;stamp('finished_ms');};
+    publish();
     const report=(next,failure=false)=>{phase=next;onDiagnostic(next,failure);};
     report('request');
     const firstFrame=startDeadline(()=>{if(current(signal)&&!hello){expired=true;ac.abort();}},FIRST_HELLO_MS);
@@ -78,12 +84,13 @@ export function openOwnerGraphSession({
       onHeartbeat:()=>{if(current(signal)&&live&&accepted&&reader.checkpoint())onState('live');},
     });
     try{
-      await read({selector,checkpoint,signal,onHeaders:()=>{if(current(signal))report('headers');},onEvent:async(name,value)=>{
+      await read({selector,checkpoint,signal,onHeaders:()=>{if(current(signal)){stamp('headers_ms');report('headers');}},
+        onFirstFrame:()=>{if(current(signal))stamp('first_frame_ms');},onEvent:async(name,value)=>{
         // The wire grammar validates again inside the reconciler. Stop the
         // network timer before waiting for a slow local warm paint.
         if(current(signal)&&name==='hello'&&value?.protocol==='graph-v1'&&
             typeof value.epoch==='string'&&/^[a-f0-9]{64}$/.test(value.epoch)){
-          hello=true;stopDeadline();report('hello');
+          hello=true;stopDeadline();stamp('hello_ms');report('hello');
         }
         await warmView;
         if(current(signal)){
@@ -97,7 +104,7 @@ export function openOwnerGraphSession({
       if(error?.status===401||error?.status===403){
         accepted=null;closed=true;
         // Hide an already painted warm picture before asynchronous local I/O.
-        report('authorization-rejected',true);onState('unauthorized');finishInitial(error);
+        finishTiming('authorization-rejected');report('authorization-rejected',true);onState('unauthorized');finishInitial(error);
         await cache?.clear();return;
       }
       // A rejected cached picture/delta is never an unbounded replay loop.
@@ -112,6 +119,7 @@ export function openOwnerGraphSession({
     if(closed)return;
     if(expired)report('hello-timeout',true);
     else if(phase==='request'||phase==='headers')report('hello-missing',true);
+    finishTiming(phase==='caught-up'?'stream-ended':phase);
     onState(accepted?'snapshot-offline':'offline');
     retry();
   }

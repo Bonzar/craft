@@ -475,6 +475,13 @@ class Viewer {
     },
     onDelta:(frame,s)=>apply({kind:'delta',frame},s),
     onReset:({epoch},s)=>{if(current(s)&&this.graphWirePlacement?.epoch!==epoch){this.graphWirePlacement=null;this.clearOwnerLiveGraph();this.loading.hidden=true;}},
+    onAttempt:timing=>{
+      if(this.graphWireKey!==key)return;
+      const data=document.documentElement.dataset;
+      const encoded=JSON.stringify(timing);
+      data.ownerGraphAttempt=encoded;
+      if(timing.finished_ms!==null)data.ownerGraphLastAttempt=encoded;
+    },
     onDiagnostic:(phase,failure)=>{
       if(this.graphWireKey!==key)return;
       const data=document.documentElement.dataset;

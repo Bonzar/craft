@@ -105,6 +105,13 @@ openGraphWire(context){
       if(!current(signal))return;
       if(this.releaseGraphPlacementState?.epoch!==epoch){this.releaseGraphPlacementState=null;this.clearReleaseOwnerLiveGraph();this.loading.hidden=true;}
     },
+    onAttempt:timing=>{
+      if(this.releaseGraphWireKey!==key)return;
+      const data=document.documentElement.dataset;
+      const encoded=JSON.stringify(timing);
+      data.ownerGraphAttempt=encoded;
+      if(timing.finished_ms!==null)data.ownerGraphLastAttempt=encoded;
+    },
     onDiagnostic:(phase,failure)=>{
       if(this.releaseGraphWireKey!==key)return;
       const data=document.documentElement.dataset;

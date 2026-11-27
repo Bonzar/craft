@@ -123,3 +123,32 @@ test('accepted wire baseline exposes renderer failure distinctly, never renderer
   assert.equal(render,1);assert.ok(watchdogCancelled);assert.deepEqual(states,['connecting','offline']);
   c.close();await c.initial;
 });
+
+
+test('per-attempt transport timing keeps prior timeout distinct from next hello',async()=>{
+  let clock=100, deadline,retry,reads=0;
+  const trace=[];
+  const c=openOwnerGraphSession({selector:{mode:'current'},now:()=>clock,
+    onAttempt:timing=>trace.push(timing),
+    startDeadline:fn=>{deadline=fn;return 1;},clearDeadline(){},
+    schedule:fn=>{retry=fn;return 1;},cancel(){},
+    read:async ({signal,onHeaders,onFirstFrame,onEvent})=>{
+      if(++reads===1){
+        clock=111;onHeaders();
+        await new Promise((_,reject)=>signal.addEventListener('abort',()=>reject(Error('synthetic private body')),{once:true}));
+      }else{
+        clock=8205;onHeaders();clock=8217;onFirstFrame();
+        clock=8220;await onEvent('hello',{protocol:'graph-v1',epoch:e});
+        await new Promise(resolve=>signal.addEventListener('abort',resolve,{once:true}));
+      }
+    }});
+  await settle();clock=8100;deadline();await settle();
+  const first=trace.at(-1);
+  assert.deepEqual(first,{attempt:1,headers_ms:11,first_frame_ms:null,hello_ms:null,finished_ms:8000,outcome:'hello-timeout'});
+  clock=8200;retry();await settle();
+  assert.deepEqual(trace.at(-1),{attempt:2,headers_ms:5,first_frame_ms:17,hello_ms:20,finished_ms:null,outcome:null});
+  assert.equal(first.finished_ms,8000);
+  assert.equal(JSON.stringify(trace).includes(e),false);
+  assert.equal(JSON.stringify(trace).includes('private body'),false);
+  c.close();
+});
