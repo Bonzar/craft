@@ -189,7 +189,7 @@ class GraphNodeOwnerBridge(ProdOwnerBridge):
         return value
 
 
-def configured_prod_owner_bridge(credentials_directory):
+def _read_owner_credentials(credentials_directory):
     if not isinstance(credentials_directory,(str,Path)) or not Path(credentials_directory).is_absolute():
         raise ValueError('PROD Base owner bridge requires existing systemd credentials')
     root=Path(credentials_directory)
@@ -215,7 +215,11 @@ def configured_prod_owner_bridge(credentials_directory):
                 return value
             finally:
                 os.close(fd)
-        queue,read_key,write_key,owner,secret=map(read,_CREDENTIALS)
-        return ProdOwnerBridge(queue,read_key,write_key,owner,bytes.fromhex(secret))
+        return tuple(map(read,_CREDENTIALS))
     finally:
         os.close(directory)
+
+
+def configured_prod_owner_bridge(credentials_directory):
+    queue,read_key,write_key,owner,secret=_read_owner_credentials(credentials_directory)
+    return ProdOwnerBridge(queue,read_key,write_key,owner,bytes.fromhex(secret))

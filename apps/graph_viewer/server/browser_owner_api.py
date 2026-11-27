@@ -338,7 +338,13 @@ def configured_browser_api(dashboard, *, clear_profile=None, prod_owner_bridge=N
     def graph_node_operation(action,args):
         with ExitStack() as stack:
             try:
-                stack.enter_context(dashboard.read_fence())
+                # The standalone TEST reader and private Base writer take
+                # compatible shared, nonblocking leases on the same deploy
+                # lock. PROD's separate read-only Graph uses its transition fence.
+                guard=getattr(dashboard,'release_lease' if dashboard.stage=='test' else 'read_fence',None)
+                if not callable(guard) or not callable(getattr(dashboard,'activation',None)):
+                    raise ValueError('Graph reader guard is absent')
+                stack.enter_context(guard())
                 dashboard.activation()
             except (OSError,ValueError,KeyError):
                 raise APIError('owner_api_unavailable','Graph reader authority unavailable',503) from None
