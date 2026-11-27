@@ -1,6 +1,6 @@
 import {readFile} from 'node:fs/promises';
 import {hash} from './store.mjs';
-const [queueHtml, queueScript, queueCss]=await Promise.all(['queue-dashboard.html','queue-dashboard.js','queue-dashboard.css'].map(name=>readFile(new URL(name,import.meta.url),'utf8')));
+const [queueHtml, queueScript, queueCss, deviceHtml, deviceScript]=await Promise.all(['queue-dashboard.html','queue-dashboard.js','queue-dashboard.css','device-enrollment.html','device-enrollment.js'].map(name=>readFile(new URL(name,import.meta.url),'utf8')));
 // The pinned bundle still owns the Connections renderer and worker.
 const TAG = /^assertion-memory-visual-v[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]{1,30})?$/;
 function once(input, from, to) {
@@ -19,8 +19,9 @@ export function patchVisual({html,script,css,releaseTag=null}) {
   if(releaseTag!==null) {
     html=once(html,'</body>','<div class="visual-release-version">Визуал: '+releaseTag+'</div>\n</body>');
   }
-  html=once(html,'</body>',queueHtml+'\n</body>');
-  script+='\n'+queueScript;
+  const ownerQueue=once(queueHtml,'<div class="queue-items"></div>',deviceHtml+'\n    <div class="queue-items"></div>');
+  html=once(html,'</body>',ownerQueue+'\n</body>');
+  script+='\n'+queueScript+'\n'+deviceScript;
   css+='\n'+queueCss;
   css+='\n#layout-toggle[hidden],#topics-toggle[hidden]{display:none!important}\n'+
     '.visual-release-version{position:fixed;bottom:12px;left:12px;z-index:3;background:#101728;color:#e6eafa;border:1px solid #526086;border-radius:7px;padding:5px 8px;font:12px system-ui;pointer-events:none}';

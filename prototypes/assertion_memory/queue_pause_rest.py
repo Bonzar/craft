@@ -28,11 +28,13 @@ def make_queue_pause_rest(*, stage, enabled=False, read_sha256=None,
     from .queue_item_removal import PATH as REMOVE, PREVIEW_PATH, check_request
     from .queue_processing_policy import PATH as POLICY, validate
     from .database_clear import PATH as CLEAR,RESET_HEADER,RESET_FORMAT,REARM_STATES
+    from . import graph_node_removal as nodes
+    node_mode=path in (nodes.PATH,nodes.PREVIEW_PATH)
     clear_mode=path==CLEAR
     policy_mode=path==POLICY
     session_mode=path==SESSIONS or policy_mode
     item_mode=path in (REMOVE,PREVIEW_PATH)
-    if path!=PATH and not (clear_mode or session_mode or item_mode):
+    if path!=PATH and not (clear_mode or session_mode or item_mode or node_mode):
         return None
     if stage not in ('test','prod') or enabled is not True:
         return None
@@ -57,7 +59,7 @@ def make_queue_pause_rest(*, stage, enabled=False, read_sha256=None,
                 or scope.get('raw_path', path.encode()) != path.encode() or scope.get('query_string')):
             return await reply(404, {'error': 'not_found'})
         method = scope.get('method')
-        if method not in (('PUT',) if item_mode else ('GET', 'PUT')):
+        if method not in (('PUT',) if item_mode or node_mode else ('GET', 'PUT')):
             return await reply(405, {'error': 'method_not_allowed'})
         try:
             peer = ipaddress.ip_address(scope['client'][0])
@@ -96,13 +98,18 @@ def make_queue_pause_rest(*, stage, enabled=False, read_sha256=None,
                             break
                 request = json.loads(body, object_pairs_hook=unique)
                 field='policy' if policy_mode else 'selected_session_ids' if session_mode else 'paused'
-                fields=({'expected_revision'} if clear_mode else
+                fields=({'thought_id','thought_version','expected_revision'} if node_mode else
+                        {'expected_revision'} if clear_mode else
                         {'queue_id','item_id','expected_revision'} if item_mode else {field,'expected_revision'})
                 if (type(request) is not dict or set(request) != fields
                         or type(request['expected_revision']) is not str
                         or not REVISION.fullmatch(request['expected_revision'])):
                     raise ValueError()
-                if item_mode:
+                if node_mode:
+                    nodes.check_request(request['thought_id'],request['thought_version'])
+                    if path==nodes.PREVIEW_PATH and request['expected_revision']!='0'*32:
+                        raise ValueError()
+                elif item_mode:
                     check_request(request['queue_id'],request['item_id'])
                 elif policy_mode:
                     validate(request[field])
@@ -134,24 +141,34 @@ def make_queue_pause_rest(*, stage, enabled=False, read_sha256=None,
             if item_mode:
                 required=({'stage','queue_id','item_id','removed','effect'} if path==REMOVE
                           else {'stage','queue_id','item_id','source_preview','source_role'})
+            if node_mode:
+                required={'stage','thought_id','thought_version','revision','scope','source_revision'}
+                if path==nodes.PATH:
+                    required.add('removed')
+                if (state.get('thought_id')!=args['thought_id'] or state.get('thought_version')!=args['thought_version']
+                        or any(type(state.get(k)) is not str or not HEX.fullmatch(state[k]) for k in ('scope','source_revision'))
+                        or path==nodes.PATH and state.get('removed') is not True):
+                    raise ValueError()
             if clear_mode:
                 field='can_clear' if method=='GET' else 'cleared'
                 required={'stage','revision',field,'capture_rearm'}|({'scope'} if method=='GET' else set())
             if (type(state) is not dict or set(state) != required or state['stage'] != stage
                     or not item_mode and (type(state['revision']) is not str or not REVISION.fullmatch(state['revision']))
-                    or not (session_mode or item_mode or clear_mode) and type(state['paused']) is not bool
+                    or not (session_mode or item_mode or clear_mode or node_mode) and type(state['paused']) is not bool
                     or clear_mode and (state['capture_rearm'] not in REARM_STATES or type(state[field]) is not bool or method=='PUT' and state[field] is not True
                          or method=='GET' and (type(state['scope']) is not str or not HEX.fullmatch(state['scope'])))):
                 raise ValueError()
         except ProofRejected:
             return await reply(403, {'error': 'owner_required'})
+        except nodes.NodeConflict as error:
+            return await reply(409, {'error': error.code})
         except Conflict:
             return await reply(409, {'error': 'queue_control_changed'})
         except ValueError:
             return await reply(400 if session_mode else 503, {'error':'invalid_request' if session_mode else
-                'database_clear_unavailable' if clear_mode else 'pause_unavailable'})
+                'database_clear_unavailable' if clear_mode else 'graph_node_removal_unavailable' if node_mode else 'pause_unavailable'})
         except Exception:
-            return await reply(503, {'error':'database_clear_unavailable' if clear_mode else 'pause_unavailable'})
+            return await reply(503, {'error':'database_clear_unavailable' if clear_mode else 'graph_node_removal_unavailable' if node_mode else 'pause_unavailable'})
         return await reply(200, state)
 
     return handler

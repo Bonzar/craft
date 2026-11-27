@@ -25,6 +25,7 @@ from .queue_processing_policy import PATH as QUEUE_POLICY_PATH
 from .queue_item_removal import PATH as QUEUE_REMOVE_PATH, PREVIEW_PATH as QUEUE_PREVIEW_PATH
 
 from .database_clear import PATH as QUEUE_CLEAR_PATH, database_lease
+from .graph_node_removal import PATH as GRAPH_REMOVE, PREVIEW_PATH as GRAPH_REMOVE_PREVIEW
 
 MIN_TOKEN_LENGTH = 32
 TOKEN_ENV_VAR = 'ASSERTION_MEMORY_TOKEN'
@@ -102,7 +103,7 @@ class AuthenticatedMemoryApp:
     async def _dispatch(self, scope, receive, send):
         if scope['type'] == 'http':
             path=scope.get('path','')
-            if path in (QUEUE_REMOVE_PATH,QUEUE_PREVIEW_PATH):
+            if path in (QUEUE_REMOVE_PATH,QUEUE_PREVIEW_PATH,GRAPH_REMOVE,GRAPH_REMOVE_PREVIEW):
                 handler=getattr(self.queue_pause,'queue_item_routes',{}).get(path)
                 if handler is None:
                     return await _error_response(404,'not found',scope,receive,send)
@@ -274,7 +275,9 @@ def main(argv=None):
         side_failed=True
         if parent is not None:
             parent.should_exit=True
-    browser=installed_prod_browser_lifespan(args.config,config,private_port=port,on_failure=failed)
+    configured_devices=getattr(neutral_factory,'machine_device_registry',None)
+    browser=installed_prod_browser_lifespan(args.config,config,private_port=port,on_failure=failed,
+        **({} if configured_devices is None else {'machine_devices':configured_devices}))
     app = create_http_app(config, token, value['public_host'], port=port,
                           additional_hosts=value.get('additional_hosts', ()), neutral_factory=neutral_factory,
                           queue_rest_factory=queue_rest_factory, queue_pause_factory=queue_pause_factory,
@@ -292,5 +295,3 @@ def main(argv=None):
 
 if __name__ == '__main__':
     main()
-
-

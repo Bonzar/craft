@@ -1,0 +1,19 @@
+<section id="owner-devices" class="queue-processing" aria-labelledby="owner-devices-title" hidden>
+  <div>
+    <h2 id="owner-devices-title">Устройства</h2>
+    <p id="owner-devices-stage"></p>
+    <ul id="owner-devices-list" aria-label="Авторизованные устройства"></ul>
+    <form id="owner-device-enroll" autocomplete="off">
+      <p>Сгенерируйте ключ на устройстве и вставьте только выведенный код sha256:…. Сам ключ должен остаться на устройстве.</p>
+      <label>Название <input id="owner-device-label" maxlength="80" required></label>
+      <label>Отпечаток SHA‑256 <input id="owner-device-fingerprint" pattern="sha256:[0-9a-f]{64}" maxlength="71" minlength="71" autocapitalize="off" spellcheck="false" required></label>
+      <button type="submit">Проверить устройство</button>
+    </form>
+    <div id="owner-device-confirm" hidden>
+      <p id="owner-device-prompt"></p>
+      <button id="owner-device-apply" type="button">Подтвердить</button>
+      <button id="owner-device-cancel" type="button">Отмена</button>
+    </div>
+    <p id="owner-devices-feedback" role="status"></p>
+  </div>
+</section>
