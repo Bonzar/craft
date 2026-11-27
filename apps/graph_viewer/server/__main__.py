@@ -59,20 +59,22 @@ def configure_owner_lanes(args, *, prod_owner_api=None):
         if args.queue_status_stage=='prod':
             from .browser_owner_api import BrowserOwnerAPI
             browser=prod_owner_api(dashboard)
-            if type(browser) is not BrowserOwnerAPI or browser.stage!='prod' or browser.clear_enabled:
+            if (type(browser) is not BrowserOwnerAPI or browser.stage!='prod'
+                    or (browser.clear_enabled and not browser.single_clear)):
                 raise ValueError('Wrong private Base writer authority')
         else:
             from .browser_owner_api import configured_browser_api, installed_test_clear_profile
-            profile=installed_test_clear_profile()
+            # Ordinary Test uses the already scoped dashboard. The legacy
+            # explicit flag is retained for old server configurations only.
+            profile = installed_test_clear_profile() if args.browser_owner_clear else None
             if args.browser_owner_clear and profile is None:
                 raise ValueError('A verified TEST clear profile is required')
+            bridge = None
             if node_removal:
                 from .graph_node_test_binding import installed_test_graph_node_bridge
                 bridge=installed_test_graph_node_bridge(dashboard)
-                browser=configured_browser_api(dashboard,clear_profile=profile,graph_node_bridge=bridge)
-            else:
-                browser=(configured_browser_api(dashboard,clear_enabled=False) if profile is None
-                         else configured_browser_api(dashboard,clear_profile=profile))
+            browser=configured_browser_api(dashboard,clear_profile=profile,graph_node_bridge=bridge,
+                                           ordinary_test_clear=not args.browser_owner_clear)
             from .device_test_binding import installed_test_device_binding
             device_binding=installed_test_device_binding(dashboard)
             if device_binding is not None:

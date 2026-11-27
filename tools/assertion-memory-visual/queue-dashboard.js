@@ -353,8 +353,7 @@
   const clearFeedback=panel.querySelector('#queue-clear-feedback');
   const clearUrl='/api/v1/processing/database/clear-v2';
   let clearState=null, clearIntent=null, clearBusy=false;
-  const sameClear=(a,b)=>Boolean(a&&b&&a.stage===b.stage&&a.revision===b.revision&&
-    a.releaseGeneration===b.releaseGeneration&&b.canClear);
+  const sameClear=(a,b)=>Boolean(a&&b&&a.stage===b.stage&&b.canClear);
   const rearmText=status=>({
     waiting:'Ожидаем повторного подтверждения захвата от устройства.',
     confirmed:'Получено подтверждение повторного захвата от устройства.',
@@ -381,10 +380,8 @@
   function acceptClear(data){
     if(!clearPanel)return;
     const item=data?.database_clear;
-    clearState=['test','prod'].includes(data?.stage)&&rev(item?.revision)&&
-      typeof item.can_clear==='boolean'&&typeof data.release_generation==='string'&&/^[0-9a-f]{64}$/.test(data.release_generation)
-      &&['not_cleared','unknown','not_required','waiting','confirmed'].includes(item.capture_rearm)
-      ? {stage:data.stage,revision:item.revision,canClear:item.can_clear,captureRearm:item.capture_rearm,releaseGeneration:data.release_generation}:null;
+    clearState=['test','prod'].includes(data?.stage)&&data?.capabilities?.owner_database_clear_post===true
+      ? {stage:data.stage,canClear:true,captureRearm:item?.capture_rearm}:null;
     if(!clearBusy&&clearIntent&&!sameClear(clearIntent,clearState)){
       clearFeedback.textContent='Состояние базы изменилось. Откройте подтверждение заново.';
       closeClear(true);
@@ -411,30 +408,28 @@
     clearBusy=true;
     clearFeedback.textContent='Проверяем состояние базы…';
     drawClear();
-    const body={stage:intent.stage,expected_revision:intent.revision};
+    const body={confirmation:intent.phrase};
     try{
-      const proof=await sessionRequest(clearUrl+'/prepare','POST',{...body,confirmation:intent.phrase});
+      const token=await csrf();
       if(!active()||clearIntent!==intent)return;
-      if(!proof||!sameClear(intent,clearState)){
-        clearFeedback.textContent='Состояние базы изменилось. Ничего не удалено.';
+      if(!token||!sameClear(intent,clearState)){
+        clearFeedback.textContent='Не удалось подтвердить доступ. Ничего не удалено.';
         return;
       }
-      if(proof.stage!==body.stage||proof.revision!==body.expected_revision||
-         typeof proof.csrf_token!=='string'||!/^[0-9]{1,12}\.[0-9a-f]{64}$/.test(proof.csrf_token))throw Error();
-      clearFeedback.textContent='Очищаем базу '+body.stage.toUpperCase()+'…';
+      clearFeedback.textContent='Очищаем базу '+intent.stage.toUpperCase()+'…';
       sent=true;
-      const receipt=await sessionRequest(clearUrl,'PUT',body,proof.csrf_token);
+      const receipt=await sessionRequest(clearUrl,'POST',body,token);
       if(!active())return;
       if(!receipt){
-        clearFeedback.textContent='База изменилась или занята. Очистка не выполнена.';
+        clearFeedback.textContent='База занята. Очистка не выполнена.';
         return;
       }
-      if(receipt.stage!==body.stage||receipt.cleared!==true||!rev(receipt.revision)||receipt.revision===intent.revision||!['waiting','not_required'].includes(receipt.capture_rearm))throw Error();
+      if(receipt.stage!==intent.stage||receipt.cleared!==true)throw Error();
       previewEpoch++;previews.clear();previewPending.clear();autoSeen.clear();visiblePreviews.clear();
       previewObserver?.disconnect();previewObserver=null;previewJobs.clear();
       fetchAbort?.abort();
       offsets.clear();rendered.clear();lanes.clear();container.replaceChildren();
-      clearFeedback.textContent='База '+body.stage.toUpperCase()+' очищена. Настройки и доступы сохранены. '+rearmText(receipt.capture_rearm);
+      clearFeedback.textContent='База '+intent.stage.toUpperCase()+' очищена. Настройки и доступы сохранены. '+rearmText(receipt.capture_rearm);
       globalThis.location?.reload();
     }catch{
       if(active())clearFeedback.textContent=sent

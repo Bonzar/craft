@@ -3,6 +3,7 @@ import asyncio
 from collections import OrderedDict
 from contextlib import ExitStack
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -114,11 +115,12 @@ class Tickets:
         del self.pending[token]
 
 class BrowserOwnerAPI:
-    def __init__(self, *, stage, perform, queue_snapshot, clear_enabled=False, dashboard_live=True, clock=time.time, node_removal=None):
+    def __init__(self, *, stage, perform, queue_snapshot, clear_enabled=False, dashboard_live=True, clock=time.time, node_removal=None, single_clear=False):
         if stage not in ('test','prod') or not callable(perform) or not callable(queue_snapshot) or type(dashboard_live) is not bool:
             raise ValueError('Expected explicit Base browser API lane')
         self.stage,self.perform,self.queue_snapshot=stage,perform,queue_snapshot
         self.clear_enabled=clear_enabled is True
+        self.single_clear=self.clear_enabled and single_clear is True
         self.dashboard_live=dashboard_live
         if node_removal is not None and not callable(node_removal):
             raise ValueError('Expected a verified private Base graph node bridge')
@@ -152,9 +154,14 @@ class BrowserOwnerAPI:
         return False
 
     def routes(self):
-        return [Route(PREFIX+k+suffix, self.control,methods=[method], name=k+suffix)
+        routes = [Route(PREFIX+k+suffix, self.control,methods=[method], name=k+suffix)
                 for k in CONTROLS if (k!='database/clear-v2' or self.stage=='test' or self.clear_enabled)
-                and (k!=GRAPH_NODE_CONTROL or self.node_removal is not None) for suffix,method in (('/prepare','POST'),('','PUT'))]
+                and (k!=GRAPH_NODE_CONTROL or self.node_removal is not None)
+                and not (k=='database/clear-v2' and self.single_clear)
+                for suffix,method in (('/prepare','POST'),('','PUT'))]
+        if self.single_clear:
+            routes.append(Route(PREFIX+'database/clear-v2',self.control,methods=['POST']))
+        return routes
 
     def graph_ready(self, request, scope):
         manager=request.app.state.manager
@@ -178,13 +185,16 @@ class BrowserOwnerAPI:
         if 'processing_control' in value:
             value['processing_control']={**value['processing_control'],'can_change':False}
         clear=value.pop('database_clear',None)
-        if clear is not None and self.graph_ready(request,clear['scope']):
+        if self.single_clear:
+            value['capabilities']['owner_database_clear_post']=True
+        elif clear is not None and self.graph_ready(request,clear['scope']):
             value['database_clear']={k:clear[k] for k in ('can_clear','revision','capture_rearm')}
         return JSONResponse(value)
 
     async def control(self, request):
         # Boundary already rejects transport/header and validates current owner session.
-        if request.app.state.owner.session(request) is None:
+        csrf=request.app.state.owner.session(request)
+        if csrf is None:
             raise APIError('owner_required','Owner session required',401)
         from .app import body
         from .auth import check_origin, COOKIE
@@ -200,6 +210,19 @@ class BrowserOwnerAPI:
         credential=request.cookies.get(COOKIE,'')
         owner=ticket_hash(credential)
         token_headers=request.headers.getlist('x-csrf-token')
+        if name=='database/clear-v2' and self.single_clear:
+            if len(token_headers)!=1 or not hmac.compare_digest(csrf.encode(),token_headers[0].encode()):
+                raise APIError('csrf_denied','Owner session CSRF required',403)
+            if data!={'confirmation':'ОЧИСТИТЬ '+self.stage.upper()}:
+                raise APIError('invalid_request','Explicit clear confirmation required',400)
+            try:
+                # Internal state read binds the existing atomic commit to the
+                # currently active release and database; no client ticket.
+                state=await asyncio.to_thread(self.perform,'clear_prepare',{})
+                return JSONResponse(await asyncio.to_thread(self.perform,'clear_commit',
+                                                        {'expected_revision':state['revision']}))
+            except processing_control.Conflict:
+                return JSONResponse({'error':'control_changed'},status_code=409)
         if name=='database/clear-v2' and not self.clear_enabled:
             raise APIError('not_found','Unknown API resource',404)
         if name==GRAPH_NODE_CONTROL:
@@ -324,12 +347,8 @@ def installed_test_clear_profile():
         logging.getLogger(__name__).warning('test_browser_clear_profile_invalid')
         return None
 
-def configured_browser_api(dashboard, *, clear_profile=None, prod_owner_bridge=None, clear_enabled=False, graph_node_bridge=None):
-    """A TEST-only profile always pins release and can bind one pre-clear epoch.
-
-    Format: verified release generation plus exact epoch scope or reusable mode.
-    The profile is an activation constraint, not proof of an owner session.
-    """
+def configured_browser_api(dashboard, *, clear_profile=None, prod_owner_bridge=None, clear_enabled=False, graph_node_bridge=None, ordinary_test_clear=False):
+    """Bind ordinary owner controls to the configured TEST or private PROD lane."""
     # Retain the old keyword only to fail closed with a meaningful error.
     # A caller flag alone cannot supply TEST epoch or release authorization.
     if clear_enabled is not False:
@@ -382,17 +401,22 @@ def configured_browser_api(dashboard, *, clear_profile=None, prod_owner_bridge=N
         def project(*, limit, offset):
             return guarded(prod_owner_bridge.queue_snapshot, limit=limit, offset=offset, snapshot=True)
 
-        return BrowserOwnerAPI(stage='prod',perform=perform,
-                               queue_snapshot=project,clear_enabled=False,node_removal=node_removal)
+        return BrowserOwnerAPI(stage='prod',perform=perform,queue_snapshot=project,
+                               clear_enabled=True,node_removal=node_removal,single_clear=True)
     if dashboard.stage!='test' or prod_owner_bridge is not None:
         raise ValueError('Invalid Graph owner API lane')
+    if ordinary_test_clear:
+        # The canonical TEST unit is the grant. An obsolete per-release
+        # marker is not a grant or an override on this ordinary path.
+        clear_profile = None
+    release_pin = scope_pin = None
     if clear_profile is not None:
         match=_TEST_CLEAR_PROFILE.fullmatch(clear_profile) if type(clear_profile) is str else None
         if match is None:
             raise ValueError('Expected verified TEST clear release and database epoch profile')
         release_pin,scope_pin=match.groups()
         scope_pin=None if scope_pin=='reusable' else scope_pin
-    clear_enabled=clear_profile is not None
+    clear_enabled=ordinary_test_clear or clear_profile is not None
     from prototypes.assertion_memory.queue_owner_domain import owner_operations
     from prototypes.assertion_memory.queue_rest import exact_database, snapshot as queue_snapshot
     def identity():
@@ -406,7 +430,7 @@ def configured_browser_api(dashboard, *, clear_profile=None, prod_owner_bridge=N
             identity=identity,stage=dashboard.stage,fresh_only=config['auto_process_fresh_mac'],
             baseline=config['processing_session_ids'])
         if action in ('clear_prepare','clear_commit'):
-            if not clear_enabled or config['generation']!=release_pin:
+            if not clear_enabled or (release_pin is not None and config['generation']!=release_pin):
                 raise APIError('not_found','Unknown API resource',404)
             if action=='clear_commit':
                 def active_clear(db):
@@ -414,7 +438,7 @@ def configured_browser_api(dashboard, *, clear_profile=None, prod_owner_bridge=N
                     # leases held. A different epoch cannot reuse this profile.
                     epoch=(*exact_database(dashboard.db),database_clear.revision(db))
                     if ((scope_pin is not None and database_clear.generation_scope('test',epoch)!=scope_pin)
-                            or identity()[1]!=release_pin):
+                            or identity()[1]!=config['generation']):
                         raise processing_control.Conflict('TEST clear profile changed or consumed')
                 return owner(action,args,authorize=active_clear)
             value=owner(action,args)
@@ -431,9 +455,9 @@ def configured_browser_api(dashboard, *, clear_profile=None, prod_owner_bridge=N
             value=queue_snapshot(control,identity=identity,database=dashboard.db,
                 interactive_enabled=current['interactive_enabled'],limit=limit,offset=offset,
                 lane=dashboard.stage,can_change=True,session_control=True,batch_cards=True,
-                clear_ready=clear_enabled and current['generation']==release_pin)
+                clear_ready=clear_enabled and not ordinary_test_clear and current['generation']==release_pin)
             if 'database_clear' in value and scope_pin is not None and value['database_clear']['scope']!=scope_pin:
                 value['database_clear']['can_clear']=False
             return value
     return BrowserOwnerAPI(stage=dashboard.stage,perform=perform,queue_snapshot=project,
-        clear_enabled=clear_enabled,node_removal=node_removal)
+        clear_enabled=clear_enabled,node_removal=node_removal,single_clear=ordinary_test_clear)

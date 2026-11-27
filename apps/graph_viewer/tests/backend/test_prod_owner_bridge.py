@@ -54,9 +54,7 @@ class ProdOwnerBridgeTests(TestCase):
             configured_browser_api(NoGraphDatabase())
         with self.assertRaises(ValueError):
             configured_browser_api(NoGraphDatabase(),prod_owner_bridge=bridge,clear_enabled=True)
-        self.assertFalse(any('clear' in route.path for route in api.routes()))
-        with self.assertRaises(ValueError):
-            api.perform('clear_commit',{'expected_revision':self.revision})
+        self.assertEqual([route.methods for route in api.routes() if 'clear' in route.path],[{'POST'}])
         self.assertEqual(self.calls,[])
         self.assertTrue(api.perform('pause_prepare',{})['paused'])
         self.assertTrue(api.perform('pause_set',{'paused':True,'expected_revision':self.revision})['paused'])
@@ -71,6 +69,22 @@ class ProdOwnerBridgeTests(TestCase):
         with self.assertRaises(ValueError):
             api.perform('pause_set',{'paused':True,'expected_revision':self.revision,'origin':'http://localhost'})
         self.assertEqual(len(self.calls),2)
+
+    def test_private_clear_uses_existing_reset_header_and_owner_proof(self):
+        from prototypes.assertion_memory.database_clear import PATH, RESET_HEADER, RESET_FORMAT
+        payload=dict(stage='prod',revision=self.revision,scope='a'*64,can_clear=True,capture_rearm='not_cleared')
+        self.assertTrue(self.bridge(payload=payload).perform('clear_prepare',{})['can_clear'])
+        result=dict(stage='prod',revision=self.revision,cleared=True,capture_rearm='not_required')
+        self.assertTrue(self.bridge(payload=result).perform('clear_commit',{'expected_revision':self.revision})['cleared'])
+        read,write=self.calls
+        self.assertEqual((read[0],read[1]),('GET',PATH))
+        method,path,body,headers=write
+        self.assertEqual((method,path),('PUT',PATH))
+        self.assertEqual(headers[RESET_HEADER.decode()],RESET_FORMAT.decode())
+        self.assertEqual(read[3][RESET_HEADER.decode()],RESET_FORMAT.decode())
+        verifier=make_owner_verifier(self.proof,self.keys[3],lane='prod',path=PATH,clock=lambda:self.now)
+        scope={'method':method,'path':path,'headers':[(k.lower().encode(),v.encode()) for k,v in headers.items()]}
+        self.assertEqual(asyncio.run(verifier(scope,body,self.revision)).lane,'prod')
 
     def test_forwarding_holds_fence_and_rejects_revoked_reader_or_transition(self):
         held=False
