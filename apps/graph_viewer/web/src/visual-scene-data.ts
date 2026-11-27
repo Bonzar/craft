@@ -8,7 +8,7 @@ import type {WorldGlyphCalibration} from './world-glyphs.ts';
 import {sourceDegrees} from './visual-transition.ts';
 import type { VisualLayout3D, VisualLayout3DInput, VisualTheme3D } from './visual-layout-3d.ts';
 
-export type VisualSceneDataOptions = Pick<VisualLayout3DInput, 'nodeIds' | 'previous' | 'unit'> & {history?:boolean;sessionId?:string|null;mode?:'topics'|'edges'};
+export type VisualSceneDataOptions = Pick<VisualLayout3DInput, 'nodeIds' | 'previous' | 'unit' | 'fixedPositions'> & {history?:boolean;sessionId?:string|null;mode?:'topics'|'edges'};
 export interface VisualSceneData {
   graph: GraphData;
   topics: Topics;

@@ -1,3 +1,4 @@
+import {preserveOwnerCamera} from './owner-graph-position.mjs';
 import { AdditiveBlending, Mesh,DoubleSide, BufferAttribute, BufferGeometry, Color, DataTexture, FloatType, InstancedBufferAttribute, InstancedBufferGeometry, LineBasicMaterial, LineSegments, NearestFilter, NoBlending, NormalBlending, Matrix4, Vector2, PerspectiveCamera, Points, RGBAFormat, Scene, ShaderMaterial, Vector3, WebGLRenderer, WebGLRenderTarget } from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import type { GraphData } from './binary.ts';
@@ -187,7 +188,7 @@ export class UniverseScene {
   }
   private labelRoot:HTMLElement;
   private resize():void {this.zoomIntent.cancel();this.hideTopicCaptions();this.labelsAt=0;const rect=this.renderer.domElement.getBoundingClientRect();this.renderer.setSize(rect.width,rect.height,false);this.camera.aspect=rect.width/Math.max(1,rect.height);this.camera.updateProjectionMatrix();if(this.manifest&&this.overview)this.fitOverview(false);const height=this.points?.material.uniforms.height;if(height)height.value=rect.height;}
-  async setGraph(graph:GraphData,manifest:Manifest,topics:Topics,worker:GraphWorker,resetCamera=false,_preserveForces=false,identities:{calibration?:WorldGlyphCalibration;selectedNodeId?:string|null;searchNodeIds?:readonly string[];signal?:AbortSignal;isCurrent?:()=>boolean}={}):Promise<number|null>{
+  async setGraph(graph:GraphData,manifest:Manifest,topics:Topics,worker:GraphWorker,resetCamera=false,_preserveForces=false,identities:{calibration?:WorldGlyphCalibration;selectedNodeId?:string|null;searchNodeIds?:readonly string[];signal?:AbortSignal;isCurrent?:()=>boolean;preserveCamera?:boolean}={}):Promise<number|null>{
     this.clearTapSelection();this.detailRequest++;const token=++this.graphToken;this.cancelMapTaps();this.zoomIntent.cancel();this.lockedZoom=null;this.zoomFocus=null;this.allStarsState=null;this.allStarsIntent=null;this.queuedNavigation=null;this.pendingFit=null;this.bindingPending=true;this.metricQueue.bind('',-1);this.viewExpected=null;this.viewPending=null;this.near.pauseFetches();lifecycle('set-graph-begin',{revision:opaqueTag(manifest.revision)});
     // Keep the accepted picture intact while fresh identities and view data are prepared.
     const sameSource=this.manifest?.provider_id===manifest.provider_id;
@@ -215,6 +216,7 @@ export class UniverseScene {
     const previews:PreviewEntry[]=[];
     if(identities.signal?.aborted||token!==this.graphToken||identities.isCurrent?.()===false){lifecycle('set-graph-rejected');throw new DOMException('Aborted','AbortError');}
     if(!visualStageMatches({revision:manifest.revision,generation:lod.generation},{lod,metrics,envelopes})||worker.envelopes?.revision!==manifest.revision)throw new Error('Подготовленная карта относится к другой версии');
+    const preserveCamera=identities.preserveCamera?preserveOwnerCamera(this.camera,this.controls):null;
     this.controller.dispose();this.controller=nextController;if(!sameSource){this.cameraPoses.clear();this.levelAnchors.clear();}this.pendingFit=null;this.explicitOrdinal=explicitOrdinal;this.searchNodes=searchOrdinals;this.selectedIndices=incident;
     this.clearGeometry();this.lod=null;
     this.cutView=undefined;this.cutViewSignature='';this.graph=graph;this.worldCalibration=calibration;this.cameraVisibility=new InstancedBufferAttribute(Float32Array.from(graph.visible),1);this.manifest=manifest;this.topics=topics;this.viewWorker=worker;this.viewExpected=null;this.viewPending=null;this.viewSignature='';this.topicByIndex=new Map(topics.topics.map(topic=>[topic.index,topic]));this.levelAnchors.clear();for(let depth=1;depth<=(lod.navigation?.topic_path.length??0);depth++){const path=lod.navigation!.topic_path.slice(0,depth),topic=this.topicByIndex.get(path.at(-1)!);if(topic)this.levelAnchors.set(this.cameraRoute({topic_path:path,expanded_cell_ids:[]}),{kind:'topic',id:topic.id,position:topic.position,radius:topic.radius});}for(const key of this.cameraPoses.keys()){const route=JSON.parse(key) as [unknown[],string[]];if(route[1].length)this.cameraPoses.delete(key);}this.near.setContext(manifest);this.shells.setBounds(worker.envelopes);this.envelopeSlots=new Map(worker.envelopes?Array.from(worker.envelopes.indices,(index,slot)=>[index,slot]):[]);this.setSelectedTopic(this.selectedTopicId);
@@ -229,7 +231,7 @@ export class UniverseScene {
     this.pickPoints=new Mesh(geometry,pickMaterial);this.pickPoints.frustumCulled=false;this.pickScene.add(this.pickPoints);
     this.setLabels(topics);this.applyProjection(lod);this.metricCamera=Math.max(this.metricCamera,binding.camera_generation);this.applyConnectivity(metrics,true);this.near.prime(previews);this.viewExpected=binding;this.near.expect(binding);this.nearActive=show;this.near.setFrame(near,near.candidates,show,blocked,focus);this.shells.show(new Uint32Array());this.shells.settle();this.visibleTopicIndices=envelopes.label_indices;this.labelsAt=0;this.updateLabels(performance.now());
     lifecycle('set-graph-accepted',{revision:opaqueTag(manifest.revision)});this.controller.activate();this.bindingPending=false;this.near.resumeFetches();
-    if(resetCamera)this.reset();this.cutAt=-Infinity;this.updateCut(performance.now());return selectedOrdinal;
+    if(resetCamera)this.reset();preserveCamera?.();this.cutAt=-Infinity;this.updateCut(performance.now());return selectedOrdinal;
     }catch(error){nextController.dispose();if(token===this.graphToken){this.bindingPending=false;if(this.lod)this.metricQueue.bind(this.lod.revision,this.lod.generation);this.near.resumeFetches();}throw error;}
   }
   private acceptGestureRoute(lod:LodResult):void{if(this.lod&&JSON.stringify([this.lod.navigation?.topic_path,this.lod.navigation?.expanded_cell_ids])!==JSON.stringify([lod.navigation?.topic_path,lod.navigation?.expanded_cell_ids]))this.zoomIntent?.acceptPinchNavigation();}

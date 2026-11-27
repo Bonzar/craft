@@ -24,6 +24,7 @@ export interface VisualLayout3DInput {
   /** All catalog/history topics may receive bounds without influencing placement. */
   boundThemes?: readonly VisualTheme3D[];
   previous?: PreviousVisualLayout3D;
+  fixedPositions?: Float32Array;
   unit?: number;
 }
 export interface VisualLayout3D {
@@ -78,6 +79,8 @@ function checkedNode(value: number, count: number): void {
  */
 export function layoutVisual3D(input: VisualLayout3DInput): VisualLayout3D {
   const { sourcePositions, edges, edgeActive, nodeIds, themes, previous } = input;
+  const fixed=input.fixedPositions;
+  if(fixed&&(fixed.length!==sourcePositions.length||fixed.some(x=>!Number.isFinite(x))))throw new Error('Invalid owner graph placement');
   const boundThemes = input.boundThemes ?? themes;
   const count = sourcePositions.length / 3, unit = input.unit ?? 1000;
   if (!Number.isInteger(count) || edges.length % 2 || !Number.isFinite(unit) || unit <= 0 || unit > 1e25) throw new Error('Invalid visual layout dimensions');
@@ -144,6 +147,7 @@ export function layoutVisual3D(input: VisualLayout3DInput): VisualLayout3D {
       homes[at + axis] = positions[at + axis]!;
     }
     if (!memberships) diagnostics.unassignedNodes++;
+    if(fixed){positions.set(fixed.subarray(at,at+3),at);reused[node]=1;diagnostics.reusedNodes++;continue;}
     const oldNode = oldById ? oldById.get(nodeIds![node]!) : previous?.sameSnapshot && !nodeIds ? node : undefined;
     if (oldNode !== undefined && previous && oldNode * 3 + 2 < previous.positions.length && finitePoint(previous.positions, oldNode * 3)) {
       positions.set(previous.positions.subarray(oldNode * 3, oldNode * 3 + 3), at);
@@ -181,7 +185,7 @@ export function layoutVisual3D(input: VisualLayout3DInput): VisualLayout3D {
       positions[at] = sums[at]! / degree[node]! + jitter[axis]!; homes[at] = positions[at]!;
     }
   }
-  for (let pass = 0; pass < PASSES; pass++) {
+  for (let pass = 0; !fixed&&pass < PASSES; pass++) {
     visitEdges(false);
     for (let node = 0; node < count; node++) {
       diagnostics.nodeVisits++;

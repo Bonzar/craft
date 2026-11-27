@@ -1,3 +1,8 @@
+import '../../apps/graph_viewer/web/test/owner-graph-cache.test.mjs';
+import '../../apps/graph_viewer/web/test/owner-graph-position.test.mjs';
+import '../../apps/graph_viewer/web/test/owner-graph-session.test.mjs';
+import '../../apps/graph_viewer/web/test/owner-graph-wire.test.mjs';
+import './graph-owner-wire-overlay.test.mjs';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';

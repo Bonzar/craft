@@ -19,6 +19,8 @@ from . import cards
 from .search import search
 from .direct_stream import configure_test,TICKET_PATH,DIRECT_PATH,issue_ticket,direct_events
 from .owner_snapshot_stream import enabled_owner as snapshot_owner, owner_snapshot_events
+from .owner_graph_stream import owner_graph_events,graph_cache_fields
+from .owner_snapshot_release_policy import graph_v1_enabled
 
 
 class Boundary(BaseHTTPMiddleware):
@@ -116,14 +118,16 @@ async def session(request):
     owner=request.app.state.owner
     if request.method=='GET':
         csrf=owner.session(request)
-        return JSONResponse({'authenticated':bool(csrf),**({'csrf_token':csrf} if csrf else {})})
+        extra=graph_cache_fields(request) if csrf else {}
+        return JSONResponse({'authenticated':bool(csrf),**({'csrf_token':csrf} if csrf else {}),**extra})
     if request.method=='DELETE':
         owner.revoke(request); response=JSONResponse({'authenticated':False})
         response.delete_cookie(COOKIE,path='/api/v1')
         return response
     data=await body(request)
     token,csrf=await asyncio.to_thread(owner.login,data.get('password'),request.client.host if request.client else 'local')
-    response=JSONResponse({'owner':True,'csrf_token':csrf})
+    extra=graph_cache_fields(request,token)
+    response=JSONResponse({'owner':True,'csrf_token':csrf,**extra})
     response.set_cookie(COOKIE,token,max_age=86400*14,httponly=True,samesite='strict',secure=secure_transport(request),path='/api/v1')
     return response
 
@@ -215,6 +219,8 @@ async def bookmark(request):
 
 
 async def events(request):
+    if 'wire' in request.query_params:
+        return await owner_graph_events(request)
     manager=request.app.state.manager
     if 'channel' in request.query_params:
         if list(request.query_params.multi_items()) != [('channel','dashboard')]:
@@ -329,6 +335,9 @@ async def capabilities(request):
         value['owner_live_transport']={'version':1,'lane':'test','origin':direct.binding.direct_origin}
     if snapshot_owner(request) and value['capabilities'].get('live') is True:
         value['owner_live_bootstrap']=1
+    if (request.app.state.owner_graph_stream is True
+            and request.app.state.owner.session(request) is not None):
+        value['owner_live_graph_v1']=True
     value['live_profile']=list(request.app.state.manager.live_profiles)
     value['preparation']={'pending':len(request.app.state.manager.preparing),'ready_snapshots':len(request.app.state.manager.graphs),'semantic_pending':len(request.app.state.manager.semantic_jobs)}
     return JSONResponse(value)
@@ -385,7 +394,11 @@ def validate_static_directory(static_dir, *private_paths):
     return root
 
 
-def create_app(source_path, state_dir, *, password=None, provider_id='assertion-memory', static_dir=None, source=None, semantic_model=None, synthetic_fixture=False, public_origin=None, bridge_read_token_file=None, allowed_proxy_hosts=(), queue_dashboard=None, queue_control=False, database_clear_lane=None, database_clear_read_token_file=None, test_direct_events_origin=None, browser_owner_api=None, existing_owner_only=False, owner_snapshot_events=False):
+def create_app(source_path, state_dir, *, password=None, provider_id='assertion-memory', static_dir=None, source=None, semantic_model=None, synthetic_fixture=False, public_origin=None, bridge_read_token_file=None, allowed_proxy_hosts=(), queue_dashboard=None, queue_control=False, database_clear_lane=None, database_clear_read_token_file=None, test_direct_events_origin=None, browser_owner_api=None, existing_owner_only=False, owner_snapshot_events=False, owner_graph_stream=False):
+    if type(owner_snapshot_events) is not bool:
+        raise ValueError('Expected explicit owner snapshot event flag')
+    graph_v1 = graph_v1_enabled(dashboard=queue_dashboard,browser=browser_owner_api,
+                                public_origin=public_origin,explicit_test=owner_graph_stream)
     # The legacy Sites env binding is deliberately read-only. Mutation must be
     # installed by the standard owner-session web app at startup.
     if type(queue_control) is not bool or queue_control and getattr(queue_dashboard,'stage',None) != 'test':
@@ -450,9 +463,11 @@ def create_app(source_path, state_dir, *, password=None, provider_id='assertion-
     app=Starlette(routes=routes,lifespan=lifespan,exception_handlers={APIError:handle_error,Exception:unavailable},
                   middleware=[Middleware(Boundary),Middleware(GZipMiddleware,minimum_size=1500)])
     app.state.public_origin=browser_origin
-    if type(owner_snapshot_events) is not bool:
-        raise ValueError('Expected explicit owner snapshot event flag')
     app.state.owner_snapshot_events=owner_snapshot_events
+    app.state.owner_graph_stream=graph_v1
+    if graph_v1:
+        import secrets
+        app.state.owner_graph_stream_key=secrets.token_bytes(32)
     app.state.owner_snapshot_slots=asyncio.Semaphore(4)
     app.state.browser_owner_api=browser_owner_api
     app.state.direct_events=direct
