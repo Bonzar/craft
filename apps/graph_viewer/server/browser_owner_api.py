@@ -68,7 +68,7 @@ def validate_query(request, route, path_params):
         '/api/v1/events':{'channel'} if 'channel' in keys else {'after','revision'},
         '/api/v1/search':{'q','mode','limit','cursor','revision'},
         '/api/v1/nodes/{id:path}/edges':{'revision','visible','limit','cursor'},
-        '/api/v1/nodes/{id:path}':{'revision','offset','limit'},
+        '/api/v1/nodes/{id:path}':{'revision','offset','limit','preview_removal'},
         '/api/v1/edges/{id:path}':{'revision'},
         '/api/v1/sources/{id:path}':{'revision','context','offset','limit','focus_start','focus_end'},
         '/api/v1/overviews/{id:path}':{'revision','offset','limit'},

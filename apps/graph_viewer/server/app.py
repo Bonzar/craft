@@ -10,6 +10,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.responses import JSONResponse,FileResponse,StreamingResponse,Response
 from starlette.routing import Route
+from .node_removal_read_preview import preview_available, removal_preview
 from .auth import OwnerStore,COOKIE,check_origin,check_host,secure_transport,validate_public_origin,validate_proxy_hosts
 from .common import APIError,selector
 from .bridge_auth import BridgeReadService,DatabaseClearReadService,clear_read_authorized,read_service_authorized
@@ -179,6 +180,10 @@ def card_response(request):
         if params['kind']=='nodes':
             row=cards.node_row(c,id=params.get('id'),ordinal=params.get('ordinal'))
             result=cards.incident(c,graph,row,request.query_params) if action=='edges' else cards.node_card(c,graph,row,request.query_params)
+            if 'preview_removal' in request.query_params:
+                if action is not None or request.query_params.getlist('preview_removal')!=['1']:
+                    raise APIError('invalid_query','Expected explicit node preview',400)
+                result=removal_preview(request,result)
         elif params['kind']=='edges':
             result=cards.edge_card(c,graph,id=params.get('id'),ordinal=params.get('ordinal'))
         elif params['kind']=='overviews':
@@ -320,6 +325,8 @@ async def capabilities(request):
             raise APIError('queue_unavailable','Queue status is temporarily unavailable',503) from None
     value=request.app.state.manager.source.capabilities()
     value['capabilities']['session_filter']=True
+    if preview_available(request):
+        value['capabilities']['owner_node_removal_preview']=True
     owner_api=getattr(request.app.state,'browser_owner_api',None)
     if (getattr(owner_api,'node_removal',None) is not None
             and request.app.state.owner.session(request) is not None):

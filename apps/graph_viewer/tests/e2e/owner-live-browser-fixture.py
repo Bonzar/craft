@@ -1,4 +1,5 @@
 """Disposable loopback-only TLS graph with native or exact packed Visual."""
+from contextlib import nullcontext
 from hashlib import sha256
 import json
 import re
@@ -6,6 +7,8 @@ from pathlib import Path
 import socket
 import subprocess
 import sys
+from threading import Thread
+from types import SimpleNamespace
 import uvicorn
 from starlette.staticfiles import StaticFiles
 
@@ -35,6 +38,46 @@ def verify_packed(static):
         if (name != 'index.html' and pattern.fullmatch(name) is None
                 or sha256((static / name).read_bytes()).hexdigest() != digest):
             raise ValueError('Packed Visual member differs from archive manifest')
+
+
+def canonical_preview_fixture(run, static, cert, key):
+    # Separate disposable canonical DB; old SSE tests keep their legacy fixture.
+    import asyncio
+    from prototypes.assertion_memory.storage import MemoryStore
+    from prototypes.assertion_memory.thought_runtime import initialize_empty
+    from prototypes.assertion_memory.thought_store import ThoughtStore
+    from prototypes.assertion_memory.thought_graph import export_graph
+
+    db = run / 'preview.sqlite3'
+    with MemoryStore(db) as store:
+        initialize_empty(store)
+        thoughts = ThoughtStore(store)
+        thoughts.publish('Fictional node preview')
+        node = export_graph(thoughts)['nodes'][0]['id']
+    (run / 'preview-node').write_text(node, encoding='ascii')
+    (run / 'preview-db-sha').write_text(sha256(db.read_bytes()).hexdigest(), encoding='ascii')
+    sock = socket.socket()
+    sock.bind(('127.0.0.1', 0))
+    sock.listen(16)
+    port = sock.getsockname()[1]
+    async def watch(*_):
+        await asyncio.Event().wait()
+    dashboard = SimpleNamespace(stage='test', db=db, activation=lambda: ('fixture', 'generation'),
+                                release_lease=nullcontext, watch=watch)
+    browser = BrowserOwnerAPI(stage='test', perform=no_write, queue_snapshot=fixture_queue, dashboard_live=False)
+    app = create_app(db, run / 'preview-state', password='synthetic-only-owner',
+                     synthetic_fixture=True, public_origin=f'https://127.0.0.1:{port}',
+                     browser_owner_api=browser, queue_dashboard=dashboard)
+    frontend = StaticFiles(directory=static, html=True)
+    async def ingress(scope, receive, send):
+        target = app if scope['type'] != 'http' or scope['path'].startswith('/api/') else frontend
+        await target(scope, receive, send)
+    server = uvicorn.Server(uvicorn.Config(ingress, ssl_keyfile=str(key), ssl_certfile=str(cert),
+                                           host='127.0.0.1', port=port, proxy_headers=False, access_log=False))
+    thread = Thread(target=server.run, kwargs={'sockets': [sock]}, daemon=True)
+    thread.start()
+    (run / 'preview-port').write_text(str(port), encoding='ascii')
+    return server, thread, sock
 
 
 
@@ -79,8 +122,16 @@ if __name__ == '__main__':
             else:
                 await frontend(scope, receive, send)
 
+        preview = canonical_preview_fixture(run, static, cert, key) if variant == 'native' else None
         (run / 'fixture-port').write_text(str(port), encoding='ascii')
-        uvicorn.Server(uvicorn.Config(
-            fixture_entrypoint, ssl_keyfile=str(key), ssl_certfile=str(cert), host='127.0.0.1',
-            port=port, proxy_headers=False, log_level='warning', access_log=False,
-        )).run(sockets=[sock])
+        try:
+            uvicorn.Server(uvicorn.Config(
+                fixture_entrypoint, ssl_keyfile=str(key), ssl_certfile=str(cert), host='127.0.0.1',
+                port=port, proxy_headers=False, log_level='warning', access_log=False,
+            )).run(sockets=[sock])
+        finally:
+            if preview is not None:
+                server, thread, preview_socket = preview
+                server.should_exit = True
+                thread.join(timeout=3)
+                preview_socket.close()

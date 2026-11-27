@@ -314,7 +314,7 @@ class Viewer {
     if(!accepted&&this.cardRequest===request)this.reader.finishLoading();return accepted;
   }
   private showNodeCard(card:NodeCard,manifest:Manifest):void{
-    this.reader.showNode(card,this.topics??undefined,pinSnapshotCallback({provider_id:manifest.provider_id,revision:card.revision},()=>this.manifest,id=>{const topic=this.topics?.topics.find(value=>value.id===id);if(topic)this.openTopic(topic);else this.notice('Тема недоступна в текущей версии.');},()=>this.notice('Срез изменился. Откройте утверждение снова, чтобы перейти к теме.')),{revision:card.revision,provider_id:manifest.provider_id});
+    this.reader.showNode(card,this.topics??undefined,pinSnapshotCallback({provider_id:manifest.provider_id,revision:card.revision},()=>this.manifest,id=>{const topic=this.topics?.topics.find(value=>value.id===id);if(topic)this.openTopic(topic);else this.notice('Тема недоступна в текущей версии.');},()=>this.notice('Срез изменился. Откройте утверждение снова, чтобы перейти к теме.')),{revision:card.revision,provider_id:manifest.provider_id},()=>this.authenticated&&this.manifest?.revision===card.revision&&this.capabilities?.provider_id===manifest.provider_id&&this.capabilities.capabilities.owner_node_removal_preview===true);
   }
   private async refreshSelectedStatus(prefetch?:LivePinStatusPrefetch):Promise<void>{
     const manifest=this.manifest,id=this.selectedNodeId,cardRequest=this.cardRequest;let pin=this.reader.pinnedAvailability;if(!manifest||!id||!pin){prefetch?.cancel();return;}if(prefetch&&(prefetch.id!==id||prefetch.pin!==pin||prefetch.cardRequest!==cardRequest||!prefetch.current())){prefetch.cancel();return;}
