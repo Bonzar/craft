@@ -13,7 +13,7 @@ const has=(object,keys)=>object!==null&&typeof object==='object'&&!Array.isArray
 const isStamp=v=>typeof v?.epoch==='string'&&EPOCH.test(v.epoch)&&typeof v.revision==='string'&&REV.test(v.revision)&&typeof v.cursor==='string'&&CURSOR.test(v.cursor);
 const cursorLess=(a,b)=>BigInt(a)<BigInt(b);
 
-export async function readOwnerGraphWire({selector,checkpoint=null,fetcher=fetch,signal,onEvent}){
+export async function readOwnerGraphWire({selector,checkpoint=null,fetcher=fetch,signal,onEvent,onHeaders}){
   const q=new URLSearchParams({wire:'graph-v1'});
   for(const k of ['mode','at','history','undated','session_id','run_id','output_snapshot_id']){
     const value=selector[k];if(value===null||value===undefined)continue;
@@ -28,6 +28,7 @@ export async function readOwnerGraphWire({selector,checkpoint=null,fetcher=fetch
   if(!response.ok||!/^text\/event-stream(?:;|$)/i.test(response.headers.get('Content-Type')??'')||!response.body){
     const error=new Error('Graph Live: invalid response');error.status=response.status;throw error;
   }
+  onHeaders?.();
   const decoder=new TextDecoder('utf-8',{fatal:true});
   const reader=response.body.getReader();
   let pending='';

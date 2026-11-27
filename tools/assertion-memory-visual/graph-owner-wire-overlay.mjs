@@ -96,6 +96,13 @@ openGraphWire(context){
       if(!current(signal))return;
       if(this.releaseGraphPlacementState?.epoch!==epoch){this.releaseGraphPlacementState=null;this.clearReleaseOwnerLiveGraph();this.loading.hidden=true;}
     },
+    onDiagnostic:(phase,failure)=>{
+      if(this.releaseGraphWireKey!==key)return;
+      const data=document.documentElement.dataset;
+      data.ownerGraphPhase=phase;
+      if(failure)data.ownerGraphFailure=phase;
+      else if(phase==='caught-up')delete data.ownerGraphFailure;
+    },
     onState:(state)=>{
       if(this.releaseGraphWireKey!==key)return;
       if(state==='unauthorized'){this.discardGraphWireCache();this.clearReleaseOwnerLiveGraph();this.showLogin();return;}

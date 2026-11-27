@@ -466,6 +466,13 @@ class Viewer {
     },onCached:(frame,s)=>apply({kind:'cached',frame},s),onSnapshot:(frame,s)=>apply({kind:'baseline',frame},s),
     onDelta:(frame,s)=>apply({kind:'delta',frame},s),
     onReset:({epoch},s)=>{if(current(s)&&this.graphWirePlacement?.epoch!==epoch){this.graphWirePlacement=null;this.clearOwnerLiveGraph();this.loading.hidden=true;}},
+    onDiagnostic:(phase,failure)=>{
+      if(this.graphWireKey!==key)return;
+      const data=document.documentElement.dataset;
+      data.ownerGraphPhase=phase;
+      if(failure)data.ownerGraphFailure=phase;
+      else if(phase==='caught-up')delete data.ownerGraphFailure;
+    },
     onState:state=>{
       if(this.graphWireKey!==key)return;
       if(state==='unauthorized'){this.discardGraphWire();this.clearOwnerLiveGraph();this.showLogin();return;}
