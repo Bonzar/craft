@@ -1,0 +1,34 @@
+# Deliberately inert review specimen; never install on a PR ref.
+name: Base .35 OCI import qualification only
+on:
+  workflow_dispatch:
+permissions: {}
+jobs:
+  qualify:
+    # Proposed activation condition after review:
+    # github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    # && github.ref_protected && github.run_attempt == 1
+    if: false
+    runs-on: ubuntu-26.04
+    timeout-minutes: 12
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Exact public inputs only, no historical checkout
+        working-directory: tools/assertion-memory-release/rollback-input-review
+        run: |
+          set -euo pipefail
+          mkdir -m 700 "$RUNNER_TEMP/public-035"
+          python3 -B materialize_035_public_runtime.py "$RUNNER_TEMP/public-035"
+          python3 -B stage_035_oci_layout.py stage "$RUNNER_TEMP/public-035/oci-blobs" \
+            "$RUNNER_TEMP/public-035/native-libraries/native-library-layer.tar" "$RUNNER_TEMP/oci-035"
+      - name: Prove loopback-only import and sandbox boundary, no source build
+        working-directory: tools/assertion-memory-release/rollback-input-review
+        run: |
+          set -euo pipefail
+          image="$(bash hosted_035_import_loopback.sh "$RUNNER_TEMP/oci-035" "$PWD")"
+          bash hosted_035_synthetic_probe.sh "$image" "$PWD"
