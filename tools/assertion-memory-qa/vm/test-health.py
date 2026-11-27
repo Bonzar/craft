@@ -6,6 +6,7 @@ from pathlib import Path
 import pwd
 import re
 import sqlite3
+import subprocess
 from tempfile import TemporaryDirectory
 import time
 
@@ -14,6 +15,9 @@ import httpx
 
 STATE = Path('/srv/assertion-release/test/state')
 LOCAL_GRAPH = 'http://127.0.0.1:8891'
+RELEASE_ROOT = STATE.parent
+GRAPH_UNIT = 'assertion-test-deploy-graph.service'
+RELEASE_NAME = re.compile(r'[0-9a-f]{40}-[0-9a-f]{64}')
 SESSION_PATH = '/api/v1/session'
 TEST_PUBLIC_ORIGIN = 'https://d5dc14bhh6hba54q0i3p.hsvi2zuh.apigw.yandexcloud.net'
 GRAPH_SESSION = re.compile(r'[A-Za-z0-9_-]{54}\Z', re.ASCII)
@@ -117,6 +121,95 @@ def graph(client, password, *, deadline_seconds=15):
             require(total==count*stride,'TEST graph buffer does not match layout')
 
 
+def bounded(path, limit):
+    with path.open('rb') as source:
+        data = source.read(limit + 1)
+    require(len(data) <= limit, 'TEST process evidence exceeds limit')
+    return data
+
+
+def listener_inode(proc):
+    listeners = []
+    for table in ('tcp', 'tcp6'):
+        rows = bounded(proc/'self/net'/table, 4 * 1024 * 1024).splitlines()
+        require(bool(rows) and b'local_address' in rows[0], 'TEST socket table unreadable')
+        for row in rows[1:]:
+            fields = row.split()
+            require(len(fields) >= 10 and b':' in fields[1], 'TEST socket row invalid')
+            if fields[3] == b'0A' and fields[1].rsplit(b':', 1)[1] == b'22BB':
+                require(table == 'tcp' and fields[1] == b'0100007F:22BB'
+                        and fields[9].isdigit() and int(fields[9]) > 0, 'TEST Graph is not loopback-only')
+                listeners.append(int(fields[9]))
+    require(len(listeners) == 1, 'TEST Graph listener is not unique')
+    return listeners[0]
+
+
+def graph_process(release, *, root=RELEASE_ROOT, proc=Path('/proc'), uid=None, systemctl=subprocess.run):
+    uid = os.getuid() if uid is None else uid
+    require(release.parent == root/'releases' and RELEASE_NAME.fullmatch(release.name)
+            and release.resolve(strict=True) == release and (root/'current').resolve(strict=True) == release,
+            'TEST Graph expected generation is not current')
+    output = systemctl(['/usr/bin/systemctl', '--user', 'show', '--no-pager',
+                        '--property=MainPID,ControlGroup,ActiveState', GRAPH_UNIT],
+                       capture_output=True, check=True, timeout=4).stdout
+    require(len(output) <= 4096, 'TEST Graph unit properties exceed limit')
+    lines = output.splitlines()
+    fields = dict(line.split(b'=', 1) for line in lines)
+    require(len(lines) == 3 and set(fields) == {b'MainPID', b'ControlGroup', b'ActiveState'}
+            and fields[b'ActiveState'] == b'active' and fields[b'MainPID'].isdigit()
+            and fields[b'ControlGroup'].endswith(b'/' + GRAPH_UNIT.encode()),
+            'TEST Graph unit not ready')
+    pid = int(fields[b'MainPID'])
+    require(pid > 1 and uid > 0, 'TEST Graph PID or UID invalid')
+    task = proc/str(pid)
+
+    def read_start():
+        raw = bounded(task/'stat', 8192)
+        prefix, sep, suffix = raw.rpartition(b') ')
+        parts = suffix.split()
+        require(sep and prefix.startswith(str(pid).encode()+b' (') and len(parts) > 19
+                and parts[19].isdigit() and int(parts[19]) > 0, 'TEST Graph start time invalid')
+        return int(parts[19])
+
+    start = read_start()
+    uids = [line.split()[1:] for line in bounded(task/'status', 65536).splitlines()
+            if line.startswith(b'Uid:')]
+    require(uids == [[str(uid).encode()] * 4], 'TEST Graph process UID mismatch')
+    require(b'0::' + fields[b'ControlGroup'] in bounded(task/'cgroup', 8192).splitlines(),
+            'TEST Graph process cgroup mismatch')
+    cwd, directory = (task/'cwd').stat(), release.stat()
+    physical = (directory.st_dev, directory.st_ino)
+    require(Path(os.readlink(task/'cwd')) == release and (cwd.st_dev, cwd.st_ino) == physical,
+            'TEST Graph process generation mismatch')
+    inode = listener_inode(proc)
+    socket = 'socket:[' + str(inode) + ']'
+    with os.scandir(task/'fd') as descriptors:
+        def holds_listener():
+            for n, entry in enumerate(descriptors):
+                require(n < 4096, 'TEST Graph descriptor limit exceeded')
+                try:
+                    if os.readlink(entry.path) == socket:
+                        return True
+                except FileNotFoundError:
+                    continue
+            return False
+        require(holds_listener(), 'TEST Graph PID does not own listener')
+    require(start == read_start(), 'TEST Graph PID changed during observation')
+    return pid, start, inode, physical
+
+
+def with_graph_process(release, probe, *, observe=graph_process):
+    before = observe(release)
+    probe()
+    require(observe(release) == before, 'TEST Graph process changed during smoke')
+
+
+def smoke_graph(state):
+    release = Path.cwd()
+    with httpx.Client(base_url=LOCAL_GRAPH,trust_env=False,timeout=3,follow_redirects=False) as client:
+        with_graph_process(release, lambda: graph(client,(state/'graph-password').read_text().strip()))
+
+
 def smoke_mcp(state):
     with httpx.Client(base_url='http://localhost:8893', trust_env=False, timeout=3) as client:
         mcp(client,(state/'mcp-token').read_text().strip())
@@ -124,8 +217,7 @@ def smoke_mcp(state):
 
 def smoke(state):
     smoke_mcp(state)
-    with httpx.Client(base_url=LOCAL_GRAPH,trust_env=False,timeout=3,follow_redirects=False) as client:
-        graph(client,(state/'graph-password').read_text().strip())
+    smoke_graph(state)
     print('Authenticated TEST MCP schema and graph layout healthy; no data or model requests.')
 
 
