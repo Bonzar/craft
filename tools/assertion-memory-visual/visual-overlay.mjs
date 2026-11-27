@@ -51,13 +51,13 @@ clearReleaseOwnerLiveGraph(){
 bootstrapReleaseOwnerGraph(){
   const boot=releaseFirstOwnerSnapshot(epoch=>{
     if(!this.authenticated)return;
-    this.releaseOwnerSnapshotEpoch=epoch;
-    if(!epoch)this.setConnection('Снимок · живой поток пока не подтверждён',false);
+    this.releaseOwnerStartupPending=false;this.releaseOwnerSnapshotEpoch=epoch;
+    if(!epoch){this.setConnection('Нет live-связи · снимок',false);globalThis.dispatchEvent?.(new CustomEvent('owner-live-offline'));}
     if(epoch)globalThis.dispatchEvent?.(new CustomEvent('owner-live-snapshot',{detail:{epoch,queue:this.releaseOwnerLiveCarriesQueue}}));
     this.ensureReleaseScene();
     return this.loadGraph(undefined,true);
   });
-  if(!this.startReleaseOwnerLive(boot)){boot.close();this.ensureReleaseScene();return this.loadGraph();}
+  if(!this.startReleaseOwnerLive(boot))boot.fallback();
   return boot.ready;
 }
 stopReleaseOwnerLive(){this.releaseOwnerSnapshotBoot?.close();this.releaseOwnerSnapshotBoot=null;this.releaseOwnerSnapshotEpoch=null;this.releaseOwnerLiveHealthy=false;this.releaseOwnerLiveCarriesQueue=false;if(this.releaseOwnerLive)globalThis.dispatchEvent?.(new CustomEvent('owner-live-connection',{detail:'closed'}));this.releaseOwnerLive?.close();this.releaseOwnerLive=null;this.releaseOwnerLiveKey=null;}
@@ -78,7 +78,7 @@ startReleaseOwnerLive(boot){
     origin=location.origin;
   }
   const key=JSON.stringify([transport,origin,this.capabilities.provider_id]);
-  if(this.releaseOwnerLive&&this.releaseOwnerLiveKey===key){
+  if(this.releaseOwnerLive&&this.releaseOwnerLiveKey===key&&(!boot||this.releaseOwnerSnapshotBoot===boot)){
     if(this.releaseOwnerLiveHealthy&&this.manifest)this.setConnection(this.selector.mode==='known_then'?'Срез закреплён · связь есть':'Live · обновляется',true);
     return true;
   }
@@ -86,6 +86,7 @@ startReleaseOwnerLive(boot){
   const current=()=>this.releaseOwnerLiveKey===key&&this.authenticated&&!this.changingContext;
   this.releaseOwnerLive=releaseOpenOwnerLive({
     allowedOrigin:origin,csrf:this.csrf,transport,initialEpoch:this.manifest?.owner_live_epoch,
+    onStartupFailure:boot?()=>{boot.fallback();return boot.ready;}:null,
     onBootstrap:epoch=>{
       if(!current())return false;
       this.releaseOwnerSnapshotEpoch=epoch;
@@ -95,7 +96,6 @@ startReleaseOwnerLive(boot){
       if(!current())return;
       this.releaseOwnerLiveHealthy=state==='live';
       globalThis.dispatchEvent?.(new CustomEvent('owner-live-connection',{detail:state}));
-      if(state==='disconnected'&&!this.manifest)boot?.fallback();
       if(state==='registered'){this.setConnection('Live · поток открыт',true);return;}
       this.setConnection(state==='live'?(this.manifest?(this.selector.mode==='known_then'?'Срез закреплён · связь есть':'Live · обновляется'):'Live · загружаем карту'):state==='connecting'?'Подключаемся к live-потоку':'Нет live-связи',state==='live');
     },
@@ -123,9 +123,11 @@ export function patchOwnerLive(script,rawSeed){
   replace('this.loading.hidden=!0,this.stream?.close()', 'this.loading.hidden=!0,this.stopReleaseOwnerLive(),this.stream?.close()');
   replace('this.cardRequest?.abort(),this.searchRequest?.abort(),this.stream?.close()', 'this.cardRequest?.abort(),this.searchRequest?.abort(),this.stopReleaseOwnerLive(),this.stream?.close()');
   replace('async start(){if(this.authenticated=', 'async start(){this.authenticated=');
-  replace(',!this.scene)try{'+releaseScene.split('try{')[1]+'this.capabilities=await', ';this.setConnection(`Подключаемся к live-потоку`,false);this.capabilities=await');
+  replace(',!this.scene)try{'+releaseScene.split('try{')[1]+'this.capabilities=await', ';this.setConnection(`Подключаемся к live-потоку`,false);this.releaseOwnerStartupPending=true;globalThis.dispatchEvent?.(new CustomEvent(`owner-live-startup`));this.capabilities=await');
+  replace('this.capabilities=await releaseGraphBootStep(12000,"Источник не ответил после входа. Повторите.",signal=>hd(\'/capabilities\',ce,signal));let e=', 'try{this.capabilities=await releaseGraphBootStep(12000,"Источник не ответил после входа. Повторите.",signal=>hd(\'/capabilities\',ce,signal))}catch(e){this.releaseOwnerStartupPending=false;if(e?.status!==401){this.setConnection(`Нет live-связи · снимок`,false);globalThis.dispatchEvent?.(new CustomEvent(`owner-live-offline`));}throw e}let e=');
   replace('await this.loadGraph(),this.renderCapabilities()', 'await this.bootstrapReleaseOwnerGraph(),this.renderCapabilities()');
-  replace('loadGraph(e){if(wd(', 'loadGraph(e,preserveOwnerLive=false){if(wd(');
+  replace('async changeSliceContext(e){','async changeSliceContext(e){if(this.releaseOwnerStartupPending)return false;');
+  replace('loadGraph(e){if(wd(', 'loadGraph(e,preserveOwnerLive=false){if(this.releaseOwnerStartupPending)return Promise.resolve();if(wd(');
   replace('this.fetchGraph(e??this.currentContext())','this.fetchGraph(e??this.currentContext(),preserveOwnerLive)');
   replace('async fetchGraph(e){','async fetchGraph(e,preserveOwnerLive=false){');
   replace('if(this.manifest&&xd(this.manifest,r)&&yd(this.currentContext(),e))', 'if(preserveOwnerLive&&this.releaseOwnerSnapshotEpoch&&r.owner_live_epoch!==this.releaseOwnerSnapshotEpoch)throw Error(`Источник изменился; ожидаем новое подключение.`);if(preserveOwnerLive&&this.manifest?.owner_live_epoch&&r.owner_live_epoch&&this.manifest.owner_live_epoch!==r.owner_live_epoch){this.clearReleaseOwnerLiveGraph();this.ensureReleaseScene();}if(this.manifest&&xd(this.manifest,r)&&yd(this.currentContext(),e))');

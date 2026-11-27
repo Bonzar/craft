@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {openOwnerLive} from '../src/owner-live-controller.mjs';
+import {firstOwnerSnapshot,openOwnerLive} from '../src/owner-live-controller.mjs';
 
 test('only independent frames on current connection mark live; reload and retry are bounded',async()=>{
   let clock=0; const connections=[],states=[],updates=[],timers=[];
@@ -83,35 +83,126 @@ test('foreground and reconnect catch up in place; a verified new epoch invalidat
   assert.equal(timers.filter(t=>t.delay===0&&!t.dead&&!t.done).length,0);
 });
 
-test('first authoritative handshake starts reads before heartbeat and never waits for rendering',async()=>{
-  const {firstOwnerSnapshot}=await import('../src/owner-live-controller.mjs');
-  const order=[],timers=[],epoch='a'.repeat(64);
-  let frame,time=0,finish;
-  const boot=firstOwnerSnapshot(id=>{order.push(['graph+queue',id,time]);return new Promise(r=>{finish=r});},{
-    schedule:(fn,ms)=>{const item={fn,ms};timers.push(item);return item},
-    cancel:item=>{if(item)item.cancelled=true}
+function startupFixture({holdOffline=false}={}) {
+  const epoch='a'.repeat(64),order=[],connections=[],timers=[];
+  const document=new EventTarget(),page=new EventTarget();
+  document.visibilityState='visible';
+  let time=0,finishOffline;
+  const settle=async()=>{for(let i=0;i<12;i++)await Promise.resolve()};
+  const boot=firstOwnerSnapshot(id=>{
+    order.push([id===null?'offline snapshot':'graph+queue',id,time]);
+    if(id===null&&holdOffline)return new Promise(resolve=>{finishOffline=resolve});
   });
-  const c=openOwnerLive({allowedOrigin:'https://192.0.2.7',csrf:'x',now:()=>time,
-    onBootstrap:id=>boot.accept(id),onState:value=>order.push([value,time]),onRefresh:(reason,id)=>order.push([reason,id,time]),
-    read:({onEvent})=>{order.push(['transport opened',time]);frame=onEvent;return new Promise(()=>{});}
+  const control=openOwnerLive({allowedOrigin:'https://example.invalid',csrf:'fixture',visibility:document,page,now:()=>time,
+    onBootstrap:id=>boot.accept(id),
+    onStartupFailure:()=>{order.push(['offline',time]);boot.fallback();return boot.ready;},
+    onState:label=>order.push([label,time]),onRefresh:reason=>order.push([reason,time]),
+    schedule:(fn,ms)=>{const timer={fn,at:time+ms};timers.push(timer);return timer;},
+    cancel:timer=>{if(timer)timer.dead=true;},
+    read:options=>{order.push(['stream requested',time]);return new Promise((resolve,reject)=>connections.push({options,resolve,reject}));}
   });
-  assert.deepEqual(order,[['connecting',0],['transport opened',0]]);
-  time=70;frame('hello',epoch);await Promise.resolve();assert.equal(order.length,2);
-  time=71;frame('reset',epoch);await Promise.resolve();
-  assert.deepEqual(order.slice(-2),[['registered',71],['graph+queue',epoch,71]]);
-  assert.equal(timers[0].cancelled,true);
-  assert.equal(boot.accept('b'.repeat(64)),false);
-  time=580;frame('heartbeat',epoch);assert.deepEqual(order.at(-1),['live',580]);
-  time=620;finish();await boot.ready;
-  time=700;frame('changed',epoch);assert.deepEqual(order.at(-1),['changed',epoch,700]);
-  c.close();
+  async function advance(until){
+    for(;;){
+      const timer=timers.filter(t=>!t.dead&&t.at<=until).sort((a,b)=>a.at-b.at)[0];
+      if(!timer)break;
+      time=timer.at;timer.dead=true;timer.fn();await settle();
+    }
+    time=until;await settle();
+  }
+  return {control,epoch,order,connections,advance,settle,document,page,boot,finishOffline:()=>finishOffline()};
+}
+
+test('slow valid startup remains connecting and does not read either view at 1500 ms',async()=>{
+  const f=startupFixture(),send=f.connections[0].options.onEvent;
+  await f.advance(1500);
+  assert.deepEqual(f.order,[['connecting',0],['stream requested',0]]);
+  f.document.visibilityState='hidden';f.document.dispatchEvent(new Event('visibilitychange'));
+  f.document.visibilityState='visible';f.document.dispatchEvent(new Event('visibilitychange'));
+  const shown=new Event('pageshow');Object.defineProperty(shown,'persisted',{value:true});f.page.dispatchEvent(shown);
+  await f.advance(1999);
+  assert.equal(f.order.length,2,'foreground startup must not fetch the graph or queue');
+  send('hello',f.epoch);send('heartbeat',f.epoch);await f.advance(2000);
+  assert.equal(f.order.length,2,'no live publication or snapshot before reset');
+  send('reset',f.epoch);await f.boot.ready;
+  assert.deepEqual(f.order.slice(-2),[['registered',2000],['graph+queue',f.epoch,2000]]);
+  await f.advance(10000);
+  assert.equal(f.order.filter(r=>r[0].includes('snapshot')||r[0]==='graph+queue').length,1);
+  assert.equal(f.connections.length,1);
+  f.control.close();
 });
 
-test('blocked stream falls back once without accepting late or forged authority',async()=>{
-  const {firstOwnerSnapshot}=await import('../src/owner-live-controller.mjs');
-  let timeout, reads=[];
-  const f=firstOwnerSnapshot(epoch=>reads.push(epoch),{schedule:fn=>{timeout=fn;return 1;},cancel(){}});
-  assert.equal(f.accept('not-real'),false);
-  timeout();await f.ready;
-  assert.deepEqual(reads,[null]);assert.equal(f.accept('a'.repeat(64)),false);
+test('transient disconnect waits for retry, final deadline explicitly settles offline once',async()=>{
+  const f=startupFixture(),first=f.connections[0];
+  first.reject(new Error('temporary network failure'));await f.settle();
+  await f.advance(1500);
+  assert.equal(f.connections.length,2);
+  assert.equal(f.order.some(r=>r[0]==='disconnected'||r[0].includes('snapshot')),false);
+  const retry=f.connections[1].options,send=retry.onEvent;
+  await f.advance(10000);await f.boot.ready;
+  assert.deepEqual(f.order.slice(-2),[['offline',10000],['offline snapshot',null,10000]]);
+  assert.equal(retry.signal.aborted,true);
+  send('hello',f.epoch);send('reset',f.epoch);send('heartbeat',f.epoch);
+  await f.advance(30000);
+  assert.equal(f.order.some(r=>r[0]==='registered'||r[0]==='live'),false);
+  assert.equal(f.order.filter(r=>r[0]==='offline snapshot').length,1);
+});
+
+test('definitive stream protocol rejection marks explicit offline before one snapshot',async()=>{
+  const f=startupFixture();
+  await f.advance(75);
+  f.connections[0].reject(Object.assign(new Error('invalid SSE'),{name:'OwnerStreamTerminalError'}));
+  await f.boot.ready;
+  assert.deepEqual(f.order.slice(-2),[['offline',75],['offline snapshot',null,75]]);
+  assert.equal(f.connections[0].options.signal.aborted,true);
+  await f.settle();await f.advance(30000);
+  assert.equal(f.connections.length,2,'protocol failure can recover via a new attempt only');
+  f.control.close();
+});
+
+test('offline snapshot settles before new connection; fresh hello/reset/heartbeat only catches up in place',async()=>{
+  const f=startupFixture({holdOffline:true}),old=f.connections[0].options;
+  await f.advance(10000);
+  assert.deepEqual(f.order.slice(-2),[['offline',10000],['offline snapshot',null,10000]]);
+  assert.equal(old.signal.aborted,true);
+  await f.advance(13000);assert.equal(f.connections.length,1);
+  old.onEvent('hello',f.epoch);old.onEvent('reset',f.epoch);old.onEvent('heartbeat',f.epoch);
+  f.finishOffline();await f.boot.ready;await f.settle();await f.advance(14000);
+  assert.equal(f.connections.length,2);
+  assert.equal(f.order.filter(r=>r[0]==='connecting').length,1,'offline snapshot must not display Connecting from retry');
+  const recent=f.connections[1].options;assert.notEqual(recent.signal,old.signal);
+  recent.onEvent('hello',f.epoch);await f.advance(14501);recent.onEvent('heartbeat',f.epoch);
+  assert.equal(f.order.some(r=>r[0]==='live'),false,'heartbeat cannot skip fresh reset');
+  recent.onEvent('reset',f.epoch);await f.advance(15001);recent.onEvent('heartbeat',f.epoch);await f.settle();
+  assert.deepEqual(f.order.slice(-2),[['live',15001],['changed',15001]]);
+  assert.equal(f.order.filter(r=>r[0]==='offline snapshot'||r[0]==='graph+queue').length,1);
+  f.control.close();
+});
+
+test('permanent authorization denial stays offline and does not retry blindly',async()=>{
+  const f=startupFixture();
+  f.connections[0].reject(Object.assign(new Error('fixture authorization denial'),
+    {name:'OwnerStreamTerminalError',authorizationDenied:true}));
+  await f.boot.ready;await f.advance(30000);
+  assert.equal(f.connections.length,1);
+  assert.equal(f.connections[0].options.signal.aborted,true);
+  assert.deepEqual(f.order.slice(-2),[['offline',0],['offline snapshot',null,0]]);
+});
+
+test('closing at logout while offline snapshot is settling cancels any recovery attempt',async()=>{
+  const f=startupFixture({holdOffline:true});
+  await f.advance(10000);f.control.close();f.finishOffline();await f.boot.ready;
+  await f.advance(30000);
+  assert.equal(f.connections.length,1);
+  assert.equal(f.order.filter(r=>r[0]==='offline snapshot').length,1);
+});
+
+test('401/403 on a recovery attempt stops that path without repaint or another snapshot',async()=>{
+  const f=startupFixture();
+  await f.advance(10000);await f.boot.ready;await f.settle();await f.advance(11000);
+  assert.equal(f.connections.length,2);
+  f.connections[1].reject(Object.assign(new Error('fixture auth denial'),{name:'OwnerStreamTerminalError',authorizationDenied:true}));
+  await f.settle();await f.advance(30000);
+  assert.equal(f.connections.length,2);
+  assert.equal(f.order.filter(r=>r[0]==='offline snapshot').length,1);
+  assert.equal(f.order.some(r=>r[0]==='live'||r[0]==='disconnected'),false);
 });

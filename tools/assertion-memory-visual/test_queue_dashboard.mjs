@@ -5,7 +5,7 @@ import {readFile} from 'node:fs/promises';
 import {runInNewContext} from 'node:vm';
 const script=await readFile(new URL('./queue-dashboard.js',import.meta.url),'utf8');
 
-function harness({stage='test',control=null,session={authenticated:true},prepare,put,standalone=false,sessionPolicy=null,processingPolicy=null,observe=false,clear=null,clearWrite,sourceEpoch}={}){
+function harness({stage='test',control=null,session={authenticated:true},prepare,put,standalone=false,sessionPolicy=null,processingPolicy=null,observe=false,clear=null,clearWrite,sourceEpoch,startupPacked=false}={}){
   class Element {
     constructor(tag=''){this.tag=tag;this.items=[];this.listeners={};this.open=false;this.dataset={};}
     addEventListener(name,fn){this.listeners[name]=fn;}
@@ -51,7 +51,7 @@ function harness({stage='test',control=null,session={authenticated:true},prepare
     unobserve(e){targets.delete(e);}
     disconnect(){targets.clear();}
   }
-  runInNewContext(script,{document:doc,EventSource,AbortController,...(observe?{IntersectionObserver:IO}:{}),addEventListener(name,fn){windowHandlers[name]=fn;},
+  runInNewContext(script,{document:doc,EventSource,AbortController,...(startupPacked?{releaseFirstOwnerSnapshot(){}}:{}),...(observe?{IntersectionObserver:IO}:{}),addEventListener(name,fn){windowHandlers[name]=fn;},
     navigator:{clipboard:{writeText:async id=>writes.push(id)}},
     setInterval:fn=>{scheduled=fn;return 1;},clearInterval(){scheduled=null;},
     fetch:async (url,options)=>{
@@ -528,4 +528,26 @@ test('initial authoritative stream primes the queue, push changes update it with
   await q.ownerEvent('snapshot',{epoch,queue:true});
   assert.equal(reads(),2);assert.match(q.text(q.container),/new-stream-row/);
   await q.ownerEvent('invalidate');assert.doesNotMatch(q.text(q.container),/new-stream-row/);
+});
+
+test('early packed queue click and poll wait for registered snapshot or explicit offline',async()=>{
+  const epoch='a'.repeat(64);
+  const q=harness({sourceEpoch:epoch,startupPacked:true});
+  const count=(u)=>u.urls.filter(x=>x.includes('queue_status=1')).length;
+  await q.open();q.timer()();await q.delay();
+  assert.equal(count(q),0);assert.equal(q.events.length,0);
+  await q.ownerEvent('startup');await q.ownerEvent('connection','connecting');
+  q.timer()();await q.delay();
+  assert.equal(count(q),0);assert.equal(q.events.length,0);
+  await q.ownerEvent('connection','registered');
+  assert.equal(count(q),0,'registration alone does not drop the epoch fence');
+  await q.ownerEvent('snapshot',{epoch,queue:true});
+  assert.equal(count(q),1);assert.equal(q.events.length,0);
+  q.timer()();await q.delay();assert.equal(count(q),1);
+
+  const offline=harness({startupPacked:true});
+  await offline.open();offline.timer()();await offline.delay();
+  assert.equal(count(offline),0);assert.equal(offline.events.length,0);
+  await offline.ownerEvent('offline');
+  assert.equal(count(offline),1);assert.equal(offline.events.length,1);
 });
