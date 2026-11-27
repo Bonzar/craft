@@ -1,0 +1,43 @@
+# Read-only verification; does not use GitHub deployment environments or touch a host.
+name: Verify Releaser From Tag (No Deploy)
+on:
+  workflow_dispatch:
+    inputs:
+      lane: {type: choice, options: [test, prod], required: true}
+      operation: {type: choice, options: [apply, rollback], required: true}
+      tag: {type: string, required: true}
+      release_id: {type: string, required: true}
+      commit: {type: string, required: true}
+      digest: {type: string, required: true}
+permissions: {contents: read}
+jobs:
+  test:
+    if: github.repository == 'Bonzar/craft' && github.ref == 'refs/heads/main' && github.ref_protected && inputs.lane == 'test'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with: {persist-credentials: false, fetch-depth: 0}
+      - uses: ./tools/assertion-memory-release/operations/unified-releaser/tag-qualifier
+        with:
+          lane: test
+          environment: assertion-releaser-test
+          operation: ${{ inputs.operation }}
+          tag: ${{ inputs.tag }}
+          release_id: ${{ inputs.release_id }}
+          commit: ${{ inputs.commit }}
+          digest: ${{ inputs.digest }}
+  prod:
+    if: github.repository == 'Bonzar/craft' && github.ref == 'refs/heads/main' && github.ref_protected && inputs.lane == 'prod'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with: {persist-credentials: false, fetch-depth: 0}
+      - uses: ./tools/assertion-memory-release/operations/unified-releaser/tag-qualifier
+        with:
+          lane: prod
+          environment: assertion-releaser-prod
+          operation: ${{ inputs.operation }}
+          tag: ${{ inputs.tag }}
+          release_id: ${{ inputs.release_id }}
+          commit: ${{ inputs.commit }}
+          digest: ${{ inputs.digest }}

@@ -1,0 +1,24 @@
+name: Qualify one immutable releaser tag
+description: Ephemeral read-only rebuild without GitHub asset attachment
+inputs:
+  lane: {required: true}
+  environment: {required: true}
+  operation: {required: true}
+  tag: {required: true}
+  release_id: {required: true}
+  commit: {required: true}
+  digest: {required: true}
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        RELEASER_LANE: ${{ inputs.lane }}
+        RELEASER_ENVIRONMENT: ${{ inputs.environment }}
+        RELEASER_OPERATION: ${{ inputs.operation }}
+        RELEASER_TAG: ${{ inputs.tag }}
+        RELEASER_RELEASE_ID: ${{ inputs.release_id }}
+        RELEASER_COMMIT: ${{ inputs.commit }}
+        RELEASER_DIGEST: ${{ inputs.digest }}
+      run: bash tools/assertion-memory-release/operations/unified-releaser/qualify-tag.sh
