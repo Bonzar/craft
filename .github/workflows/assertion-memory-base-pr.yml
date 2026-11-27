@@ -113,5 +113,8 @@ jobs:
           export PYTHONPATH="$PWD:$PWD/tools/assertion-memory-hosted-mcp:$PWD/tools/assertion-memory-release"
           python3 -B tools/assertion-memory-qa/test_optional_owner_features.py graph-node-removal
           python3 -B tools/assertion-memory-qa/test_optional_owner_features.py device-registry
+      - name: Test independently packaged releaser contract
+        working-directory: tools/assertion-memory-release/operations/unified-releaser
+        run: python3 -B -m unittest -v test_releaser test_qualify_release
       - name: Build narrow, data-free release
         run: tools/assertion-memory-qa/build-release.sh "$RUNNER_TEMP/qa-release"
