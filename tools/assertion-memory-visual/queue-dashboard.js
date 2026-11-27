@@ -380,8 +380,13 @@
   function acceptClear(data){
     if(!clearPanel)return;
     const item=data?.database_clear;
+    const legacy=data?.owner_database_clear_csrf;
+    const hasLegacy=data!=null&&Object.prototype.hasOwnProperty.call(data,'owner_database_clear_csrf');
+    const acceptsLegacy=data?.stage==='prod'&&typeof legacy==='string'&&/^[0-9]{1,12}\.[0-9a-f]{64}$/.test(legacy);
     clearState=['test','prod'].includes(data?.stage)&&data?.capabilities?.owner_database_clear_post===true
-      ? {stage:data.stage,canClear:true,captureRearm:item?.capture_rearm}:null;
+      &&(!hasLegacy||acceptsLegacy)
+      ? {stage:data.stage,canClear:true,captureRearm:item?.capture_rearm,
+          legacyToken:acceptsLegacy?legacy:null}:null;
     if(!clearBusy&&clearIntent&&!sameClear(clearIntent,clearState)){
       clearFeedback.textContent='Состояние базы изменилось. Откройте подтверждение заново.';
       closeClear(true);
@@ -389,7 +394,7 @@
   }
   clearOpen?.addEventListener('click',()=>{
     if(!panel.open||clearBusy||!clearState?.canClear||clearIntent)return;
-    clearIntent={...clearState,phrase:'ОЧИСТИТЬ '+clearState.stage.toUpperCase()};
+    clearIntent={stage:clearState.stage,phrase:'ОЧИСТИТЬ '+clearState.stage.toUpperCase()};
     clearLabel.textContent='Введите «'+clearIntent.phrase+'» для подтверждения';
     clearFeedback.textContent='';drawClear();clearTyped.focus();
   });
@@ -410,15 +415,18 @@
     drawClear();
     const body={confirmation:intent.phrase};
     try{
-      const token=await csrf();
+      // Packed legacy PROD does not expose a Graph session CSRF. Only its
+      // current owner-authorized queue snapshot may supply a clear token.
+      const legacy=clearState.legacyToken!==null;
+      const token=legacy?clearState.legacyToken:await csrf();
       if(!active()||clearIntent!==intent)return;
-      if(!token||!sameClear(intent,clearState)){
+      if(!token||!sameClear(intent,clearState)||(clearState.legacyToken!==null)!==legacy){
         clearFeedback.textContent='Не удалось подтвердить доступ. Ничего не удалено.';
         return;
       }
       clearFeedback.textContent='Очищаем базу '+intent.stage.toUpperCase()+'…';
       sent=true;
-      const receipt=await sessionRequest(clearUrl,'POST',body,token);
+      const receipt=await sessionRequest(clearUrl,legacy?'PUT':'POST',body,token);
       if(!active())return;
       if(!receipt){
         clearFeedback.textContent='База занята. Очистка не выполнена.';
