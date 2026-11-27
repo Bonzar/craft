@@ -1,0 +1,105 @@
+# Source review only. Keep outside .github/workflows until separately reviewed.
+name: Base .35 independent hermetic build-only proof
+on:
+  workflow_dispatch:
+permissions: {}
+concurrency:
+  group: base-035-two-hermetic-builds
+  cancel-in-progress: false
+jobs:
+  materialize:
+    if: false # Upon reviewed installation: exact Bonzar/craft protected main workflow_dispatch, run_attempt 1 only.
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Acquire and independently validate pinned public bytes; never execute them
+        working-directory: tools/assertion-memory-release/rollback-input-review
+        shell: bash
+        run: |
+          set -euo pipefail
+          store="$RUNNER_TEMP/public35"
+          python3 -B materialize_035_inputs.py "$store"
+          python3 -B materialize_035_public_runtime.py "$store"
+          python3 -B verify_035_material.py "$store"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: base35-public-${{ github.run_id }}-attempt-1
+          path: ${{ runner.temp }}/public35/
+          if-no-files-found: error
+          retention-days: 1
+  rebuild:
+    if: false # Enable only alongside reviewed materialize/compare and exact main guards.
+    needs: materialize
+    strategy:
+      fail-fast: false
+      matrix:
+        replica: [a, b]
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+      actions: read
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: base35-public-${{ github.run_id }}-attempt-1
+          path: ${{ runner.temp }}/public35/
+      - name: Rehash all public bytes and derive exact source independently
+        working-directory: tools/assertion-memory-release/rollback-input-review
+        shell: bash
+        run: |
+          set -euo pipefail
+          store="$RUNNER_TEMP/public35"
+          tag=refs/tags/assertion-memory-v0.1.35
+          revision=710cf557d29cf91e6ab1550d27e525817df96588
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse "${tag}^{commit}")" = "$revision"
+          test ! -e "$store/source.tar"
+          git archive --format=tar "$revision" -- apps/graph_viewer prototypes/assertion_memory > "$store/source.tar"
+          python3 -B verify_035_material.py --source "$store/source.tar"
+          python3 -B verify_035_sqlite_provider.py --compose "$store/native-libraries"
+          python3 -B stage_035_oci_layout.py stage "$store/oci-blobs" \
+            "$store/native-libraries/native-library-layer.tar" "$RUNNER_TEMP/oci"
+          bash hosted_035_build_qualified.sh "$RUNNER_TEMP/oci" "$PWD" "$store" "$RUNNER_TEMP/built"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: base35-built-${{ matrix.replica }}-${{ github.run_id }}-attempt-1
+          path: ${{ runner.temp }}/built/proof/
+          if-no-files-found: error
+          retention-days: 1
+  compare:
+    if: false
+    needs: rebuild
+    runs-on: ubuntu-26.04
+    permissions:
+      actions: read
+      contents: read
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: base35-built-a-${{ github.run_id }}-attempt-1
+          path: ${{ runner.temp }}/a
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: base35-built-b-${{ github.run_id }}-attempt-1
+          path: ${{ runner.temp }}/b
+      - name: Independently reread each unpacked file and compare canonical tar exactly
+        working-directory: tools/assertion-memory-release/rollback-input-review
+        shell: bash
+        run: python3 -B package_035_rebuild.py compare "$RUNNER_TEMP/a" "$RUNNER_TEMP/b"
