@@ -7,6 +7,8 @@ import http.client
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import sqlite3
+import ssl
+import subprocess
 from threading import Thread
 import test_asset_origin as fixture
 from prototypes.assertion_memory.database_clear import PATH as CLEAR_PATH
@@ -27,7 +29,10 @@ class StandalonePause(fixture.OriginTest):
             with self.subTest(lane=lane):
                 self.exercise(lane)
 
-    def exercise(self,lane):
+    def test_prod_ordinary_clear_through_https(self):
+        self.exercise('prod',ordinary=True)
+
+    def exercise(self,lane,ordinary=False):
         edge, graph, queue, read, write, actor, pause_edge = (x*64 for x in '2345678')
         secret=bytes.fromhex('9'*64)
         host=f'visual-{lane}.example.test'
@@ -158,11 +163,23 @@ class StandalonePause(fixture.OriginTest):
         base=start(ThreadingHTTPServer(('127.0.0.1',0),Base))
         url=f'http://127.0.0.1:{base.server_port}'
         opts=dict(queue_origin=url,queue_token=queue,standalone=(origin,edge,url,graph))
-        visual=start(fixture.origin.make_server(self.root,fixture.TOKEN,0,environment=lane,**opts,
-                    pause=(url,read,write,b'c'*32,pause_edge,actor,secret),clock=lambda:now[0]))
+        visual=fixture.origin.make_server(self.root,fixture.TOKEN,0,environment=lane,**opts,
+                    pause=(url,read,write,b'c'*32,pause_edge,actor,secret),clock=lambda:now[0])
+        client_context=None
+        if ordinary:
+            cert,key=(self.root/name for name in ('cert.pem','key.pem'))
+            subprocess.run(['openssl','req','-x509','-newkey','rsa:2048','-nodes','-days','1',
+                 '-subj','/CN=127.0.0.1','-addext','subjectAltName=IP:127.0.0.1',
+                 '-keyout',str(key),'-out',str(cert)],check=True,capture_output=True,timeout=10)
+            context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.load_cert_chain(cert,key)
+            visual.socket=context.wrap_socket(visual.socket,server_side=True)
+            client_context=ssl.create_default_context(cafile=str(cert))
+        start(visual)
 
         def request(method, path, data, *, trusted=edge, proof=pause_edge, sent_origin=origin, extra=None):
-            conn=http.client.HTTPConnection(*visual.server_address,timeout=2)
+            conn=(http.client.HTTPSConnection(*visual.server_address,timeout=5,context=client_context)
+                  if ordinary else http.client.HTTPConnection(*visual.server_address,timeout=2))
             headers={'Host':host,'Origin':sent_origin,'Content-Type':'application/json',
                      'Cookie':'ordinary=browser',**(extra or {})}
             if trusted:
@@ -277,6 +294,30 @@ class StandalonePause(fixture.OriginTest):
         calls.clear()
         clear='/api/v1/processing/database/clear-v2'
         snapshot='/api/v1/capabilities?queue_status=1'
+        if ordinary:
+            graph_scope_mode[0]='wrong'
+            code,nonowner=request('GET',snapshot,None,proof=None)
+            self.assertEqual(code,200)
+            self.assertNotIn('owner_database_clear_post',nonowner['capabilities'])
+            self.assertNotIn('owner_database_clear_csrf',nonowner)
+            code,view=request('GET',snapshot,None)
+            self.assertEqual(code,200)
+            self.assertNotIn('database_clear',view)
+            self.assertIs(view['capabilities']['owner_database_clear_post'],True)
+            token=view['owner_database_clear_csrf']
+            proof_header={'X-CSRF-Token':token}
+            body={'confirmation':'ОЧИСТИТЬ PROD'}
+            self.assertEqual(request('POST',clear,body,extra=proof_header)[0],405)
+            self.assertEqual(request('PUT',clear,body,proof=None,extra=proof_header)[0],403)
+            self.assertEqual(request('PUT',clear,body,sent_origin='https://foreign.test',extra=proof_header)[0],403)
+            self.assertEqual(request('PUT',clear,body)[0],403)
+            self.assertEqual(request('PUT',clear,{'confirmation':'ОЧИСТИТЬ TEST'},extra=proof_header)[0],400)
+            calls.clear()
+            self.assertEqual(request('PUT',clear,body,extra=proof_header)[0],200)
+            self.assertEqual(calls,[('GET',CLEAR_PATH),('PUT',CLEAR_PATH)])
+            with sqlite3.connect(db) as conn:
+                self.assertEqual(conn.execute('SELECT count(*) FROM memory_raw_events').fetchone()[0],0)
+            return
         self.assertNotIn('database_clear',request('GET',snapshot,None,proof=None)[1])
         self.assertEqual(request('GET',snapshot,None)[1]['database_clear'],{'revision':db_state['revision'],'can_clear':True,'capture_rearm':'not_cleared'})
         for mode in ('wrong','old'):
