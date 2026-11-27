@@ -66,11 +66,13 @@ def configure_owner_lanes(args, *, prod_owner_api=None):
             profile=installed_test_clear_profile()
             if args.browser_owner_clear and profile is None:
                 raise ValueError('A verified TEST clear profile is required')
-            graph_node_bridge=None
             if node_removal:
                 from .graph_node_test_binding import installed_test_graph_node_bridge
-                graph_node_bridge=installed_test_graph_node_bridge(dashboard)
-            browser=configured_browser_api(dashboard,clear_profile=profile,graph_node_bridge=graph_node_bridge)
+                bridge=installed_test_graph_node_bridge(dashboard)
+                browser=configured_browser_api(dashboard,clear_profile=profile,graph_node_bridge=bridge)
+            else:
+                browser=(configured_browser_api(dashboard,clear_enabled=False) if profile is None
+                         else configured_browser_api(dashboard,clear_profile=profile))
             from .device_test_binding import installed_test_device_binding
             device_binding=installed_test_device_binding(dashboard)
             if device_binding is not None:
