@@ -38,12 +38,12 @@ jobs:
           python3 -B materialize_035_public_runtime.py "$work/public"
           python3 -B stage_035_oci_layout.py stage "$work/public/oci-blobs" \
             "$work/public/native-libraries/native-library-layer.tar" "$work/oci"
-      - name: Import fixed OCI from local layout and run fixed sandbox probe
+      - name: Qualify exact local Docker archive and run fixed sandbox probe
         working-directory: tools/assertion-memory-release/rollback-input-review
         shell: bash
         run: |
           set -euo pipefail
-          bash hosted_035_import_local_oci.sh "$RUNNER_TEMP/base035-qualification/oci"
+          bash hosted_035_docker_archive_probe.sh "$RUNNER_TEMP/base035-qualification/oci" "$PWD"
       - name: Purge only this ephemeral qualification
         if: ${{ always() }}
         shell: bash
