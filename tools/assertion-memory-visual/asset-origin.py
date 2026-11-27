@@ -633,7 +633,14 @@ def make_server(root, token, port=8829, *, environment='test', queue_origin=None
                         if any(not re.fullmatch(r'(?:0|[1-9][0-9]{0,6})',v) for v in (l,o)) or not 1<=int(l)<=50 or int(o)>1_000_000:
                             return self.respond(400)
                         fetch = fetch_owner_queue if self.has_pause_owner() else fetch_queue
-                        return self.respond(200,fetch(int(l),int(o)),'application/json',headers=safe)
+                        page = fetch(int(l),int(o))
+                        if environment=='prod' and self.has_pause_owner():
+                            value = unique_json(page)
+                            value['capabilities']['owner_database_clear_post']=True
+                            value['owner_database_clear_csrf']=csrf_token('ordinary-post',int(clock())+30,
+                                                                         'database-clear-post')
+                            page=json.dumps(value,separators=(',',':'),allow_nan=False).encode('utf-8')
+                        return self.respond(200,page,'application/json',headers=safe)
                 if GRAPH_RE.fullmatch(path):
                     return self.graph(raw,safe)
                 match=re.fullmatch(r'/visual/([a-f0-9]{64})/(.*)',path)
@@ -752,6 +759,22 @@ def make_server(root, token, port=8829, *, environment='test', queue_origin=None
                 request=unique_json(raw)
             except (ValueError,OSError,RecursionError):
                 return self.respond(400)
+            if environment=='prod' and not prepare and type(request) is dict and set(request)=={'confirmation'}:
+                if request != {'confirmation':'ОЧИСТИТЬ PROD'}:
+                    return self.respond(400)
+                tokens=self.headers.get_all('X-CSRF-Token',[])
+                token=re.fullmatch(r'([0-9]{1,12})\.[0-9a-f]{64}',tokens[0]) if len(tokens)==1 else None
+                now=int(clock())
+                if (not token or not now < int(token[1]) <= now+30
+                        or not hmac.compare_digest(tokens[0],csrf_token('ordinary-post',int(token[1]),'database-clear-post'))):
+                    return self.respond(403)
+                current=clear_call('GET')
+                if not current['can_clear']:
+                    return self.respond(409,b'{"error":"database_clear_state_changed"}','application/json',headers=safe)
+                result=clear_call('PUT',{'expected_revision':current['revision']})
+                if result is None or result['revision']==current['revision']:
+                    return self.respond(409,b'{"error":"database_clear_state_changed"}','application/json',headers=safe)
+                return self.respond(200,json.dumps(result,separators=(',',':')).encode(),'application/json',headers=safe)
             fields={'stage','expected_revision','confirmation'} if prepare else {'stage','expected_revision'}
             if (type(request) is not dict or set(request)!=fields
                     or request['stage'] not in ('test','prod')
