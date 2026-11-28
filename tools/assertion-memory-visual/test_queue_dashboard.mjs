@@ -530,6 +530,34 @@ test('absent owner/session or withdrawn capability cannot write; uncertain POST 
   assert.match(get('clear-feedback').textContent,/не подтверждён/);
 });
 
+test('clear distinguishes proved pre-write rejection from an unconfirmed result without retry',async()=>{
+  const scenarios=[
+    ['prod',403,{error:'clear_confirmation_expired'},/Подтверждение истекло.*не выполнялась/],
+    ['prod',503,{error:'clear_unavailable_before_write'},/недоступна.*не дошёл/],
+    ['prod',409,{error:'database_clear_state_changed'},/База занята.*не выполнена/],
+    ['prod',503,{},/Результат очистки не подтверждён/],
+    ['prod',403,{error:'unknown'},/Результат очистки не подтверждён/],
+    ['test',403,{error:{code:'csrf_denied'}},/Подтверждение отклонено.*не выполнялась/],
+  ];
+  for(const [stage,status,response,text] of scenarios){
+    const method=stage==='prod'?'PUT':'POST';
+    const phrase='ОЧИСТИТЬ '+stage.toUpperCase();
+    const token=method==='PUT'?'123.'+'a'.repeat(64):'a'.repeat(64);
+    const h=harness({stage,clear:{can_clear:true},session:{authenticated:true,csrf_token:token},
+      ...(method==='PUT'?{legacyClearToken:token}:{}),
+      clearWrite:()=>Response.json(response,{status}),
+    });
+    await h.open();
+    const get=h.clearNode;
+    get('clear-open').listeners.click();
+    get('clear-typed').value=phrase;
+    await get('clear-commit').listeners.click();
+    assert.match(get('clear-feedback').textContent,text);
+    assert.deepEqual(h.clearCalls,[{url:'/api/v1/processing/database/clear-v2',method,
+      args:{confirmation:phrase},csrf:token}]);
+  }
+});
+
 test('unadvertised clear stays hidden; capture resumes only when separately acknowledged',async()=>{
   const old=harness();
   await old.open();

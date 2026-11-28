@@ -1,6 +1,6 @@
 """Loopback Visual origin for immutable assets and optional TEST Base queue reads."""
 from hashlib import sha256
-from http.client import HTTPConnection
+from http.client import HTTPConnection, HTTPException
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import hmac
 from ipaddress import IPv4Address
@@ -768,10 +768,18 @@ def make_server(root, token, port=8829, *, environment='test', queue_origin=None
                 tokens=self.headers.get_all('X-CSRF-Token',[])
                 token=re.fullmatch(r'([0-9]{1,12})\.[0-9a-f]{64}',tokens[0]) if len(tokens)==1 else None
                 now=int(clock())
-                if (not token or not now < int(token[1]) <= now+30
+                def rejected(status, code):
+                    return self.respond(status,json.dumps({'error':code}).encode(),'application/json',
+                                        headers={**safe,'Cache-Control':'no-store'})
+                if (not token or int(token[1])>now+30
                         or not hmac.compare_digest(tokens[0],csrf_token('ordinary-post',int(token[1]),'database-clear-post'))):
-                    return self.respond(403)
-                current=clear_call('GET')
+                    return rejected(403,'clear_confirmation_rejected')
+                if now>=int(token[1]):
+                    return rejected(403,'clear_confirmation_expired')
+                try:
+                    current=clear_call('GET')
+                except (OSError, ValueError, HTTPException):
+                    return rejected(503,'clear_unavailable_before_write')
                 if not current['can_clear']:
                     return self.respond(409,b'{"error":"database_clear_state_changed"}','application/json',headers=safe)
                 result=clear_call('PUT',{'expected_revision':current['revision']})

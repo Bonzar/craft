@@ -339,9 +339,19 @@
       headers:{accept:'application/json','content-type':'application/json',...(token?{'x-csrf-token':token}:{})},
       body:JSON.stringify(body)});
     if(response.status===409||allowLegacy&&[400,404].includes(response.status))return null;
-    if(!response.ok||!response.headers.get('content-type')?.includes('application/json'))throw Error();
+    const json=response.headers.get('content-type')?.includes('application/json');
+    if(!response.ok||!json){
+      if(path===clearUrl&&json&&[403,503].includes(response.status)){
+        const error=(await response.json())?.error;
+        if(method==='PUT'&&((response.status===403&&['clear_confirmation_rejected','clear_confirmation_expired'].includes(error))
+           ||(response.status===503&&error==='clear_unavailable_before_write')))throw new ClearRejected(error);
+        if(method==='POST'&&response.status===403&&error?.code==='csrf_denied')throw new ClearRejected('csrf_denied');
+      }
+      throw Error();
+    }
     return response.json();
   }
+  class ClearRejected extends Error {}
   const clearPanel=panel.querySelector('#queue-database-clear');
   const clearOpen=panel.querySelector('#queue-clear-open');
   const clearConfirmation=panel.querySelector('#queue-clear-confirmation');
@@ -439,10 +449,20 @@
       offsets.clear();rendered.clear();lanes.clear();container.replaceChildren();
       clearFeedback.textContent='База '+intent.stage.toUpperCase()+' очищена. Настройки и доступы сохранены. '+rearmText(receipt.capture_rearm);
       globalThis.location?.reload();
-    }catch{
-      if(active())clearFeedback.textContent=sent
-        ? 'Результат очистки не подтверждён. Проверьте состояние базы перед повтором.'
-        : 'Не удалось подтвердить состояние базы. Запрос на очистку не отправлен.';
+    }catch(error){
+      if(active()){
+        if(error instanceof ClearRejected){
+          clearFeedback.textContent=error.message==='clear_confirmation_expired'
+            ? 'Подтверждение истекло. Очистка не выполнялась. Откройте подтверждение заново.'
+            : error.message==='clear_unavailable_before_write'
+              ? 'База недоступна. Запрос до очистки не дошёл.'
+              : 'Подтверждение отклонено. Очистка не выполнялась.';
+        }else{
+          clearFeedback.textContent=sent
+            ? 'Результат очистки не подтверждён. Проверьте состояние базы перед повтором.'
+            : 'Не удалось подтвердить состояние базы. Запрос на очистку не отправлен.';
+        }
+      }
     }finally{
       clearBusy=false;
       clearState=null;
