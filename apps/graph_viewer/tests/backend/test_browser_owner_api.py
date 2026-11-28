@@ -308,3 +308,72 @@ class BrowserOwnerBoundaryTest(unittest.TestCase):
         marker.rename(parent/'real')
         marker.symlink_to(parent/'real')
         with self.assertRaises(OSError):read_test_clear_profile(marker,owner=os.getuid())
+
+
+class OwnerGraphResponseStartTests(unittest.IsolatedAsyncioTestCase):
+    async def test_sse_headers_do_not_wait_for_first_graph_generation(self):
+        import asyncio
+        from threading import Event, Timer
+        from starlette.applications import Starlette
+        from starlette.middleware import Middleware
+        from starlette.routing import Route
+        from apps.graph_viewer.server.app import Boundary, events
+
+        generation_released=Event()
+        class Manager:
+            closed=False
+            def sync_generation(self):
+                if not generation_released.wait(timeout=2):
+                    raise AssertionError('fixture generation was not released')
+                return 1,2,'1'*32
+
+        host='fixture.invalid'
+        app=Starlette(routes=[Route('/api/v1/events',events)],middleware=[Middleware(Boundary)])
+        app.state.public_origin='https://'+host
+        app.state.manager=Manager()
+        app.state.owner_graph_stream=True
+        app.state.owner=SimpleNamespace(session=lambda r:'fixture-csrf'
+                                        if r.cookies.get('fixture')=='owner' else None)
+        app.state.browser_owner_api=SimpleNamespace(allows=lambda r:r.url.path=='/api/v1/events')
+        app.state.owner_snapshot_slots=asyncio.Semaphore(2)
+        scope=dict(type='http',asgi=dict(version='3.0',spec_version='2.4'),
+                   http_version='1.1',scheme='https',path='/api/v1/events',raw_path=b'/api/v1/events',
+                   query_string=b'wire=graph-v1',root_path='',method='GET',
+                   headers=[(b'host',host.encode()),(b'cookie',b'fixture=owner'),
+                            (b'sec-fetch-site',b'same-origin')],
+                   client=('127.0.0.1',9),server=(host,443))
+        started=False
+        received=asyncio.Event()
+        witness={}
+        async def receive():
+            nonlocal started
+            if not started:
+                started=True
+                return dict(type='http.request',body=b'',more_body=False)
+            await received.wait()
+            return dict(type='http.disconnect')
+
+        async def send(message):
+            if message['type']=='http.response.start':
+                witness['status']=message['status']
+                witness['sse']=dict(message['headers'])[b'content-type'].startswith(b'text/event-stream')
+                witness['headers_before_generation']=not generation_released.is_set()
+                generation_released.set()
+            elif message.get('body',b'').startswith(b'event: hello\n'):
+                witness['hello']=True
+                received.set()
+                raise OSError('fixture disconnected after hello')
+
+        # Independent watchdog lets the old, blocking implementation finish so
+        # failure is an assertion about order, not a hung ASGI request.
+        timer=Timer(0.5,generation_released.set)
+        timer.start()
+        try:
+            try:
+                await asyncio.wait_for(app(scope,receive,send),timeout=3)
+            except OSError:
+                if not witness.get('hello'):
+                    raise
+        finally:
+            timer.cancel()
+        self.assertEqual(witness,dict(status=200,sse=True,headers_before_generation=True,hello=True))

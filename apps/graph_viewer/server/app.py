@@ -52,7 +52,10 @@ class Boundary(BaseHTTPMiddleware):
                         raise APIError('csrf_denied','Valid CSRF token required',403)
             graph_read=(request.method in {'GET','HEAD'} and path.startswith('/api/v1/')
                         and path.split('/')[3] in {'graph','nodes','edges','sources','overviews','search','bookmarks','capabilities','events'})
-            manager=request.app.state.manager if graph_read else None
+            # graph-v1 owns its generation fence inside the live stream.
+            stream_generation=(request.method=='GET' and path=='/api/v1/events'
+                               and request.query_params.get('wire')=='graph-v1')
+            manager=request.app.state.manager if graph_read and not stream_generation else None
             generation=manager.sync_generation() if manager is not None else None
             response=await call_next(request)
             if manager is not None and path!='/api/v1/events' and not manager.generation_matches(generation):
