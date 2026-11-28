@@ -586,26 +586,24 @@ test('initial authoritative stream primes the queue, push changes update it with
   await q.ownerEvent('invalidate');assert.doesNotMatch(q.text(q.container),/new-stream-row/);
 });
 
-test('early packed queue click and poll wait for registered snapshot or explicit offline',async()=>{
+test('early packed queue loads owner REST without graph hello and does not open a competing stream',async()=>{
   const epoch='a'.repeat(64);
   const q=harness({sourceEpoch:epoch,startupPacked:true});
   const count=(u)=>u.urls.filter(x=>x.includes('queue_status=1')).length;
-  await q.open();q.timer()();await q.delay();
-  assert.equal(count(q),0);assert.equal(q.events.length,0);
-  await q.ownerEvent('startup');await q.ownerEvent('connection','connecting');
-  q.timer()();await q.delay();
-  assert.equal(count(q),0);assert.equal(q.events.length,0);
-  await q.ownerEvent('connection','registered');
-  assert.equal(count(q),0,'registration alone does not drop the epoch fence');
-  await q.ownerEvent('snapshot',{epoch,queue:true});
+  await q.open();
   assert.equal(count(q),1);assert.equal(q.events.length,0);
-  q.timer()();await q.delay();assert.equal(count(q),1);
+  await q.ownerEvent('startup');await q.ownerEvent('connection','connecting');
+  await q.ownerEvent('connection','registered');
+  assert.equal(count(q),1);assert.equal(q.events.length,0);
+  await q.ownerEvent('snapshot',{epoch,queue:true});
+  assert.equal(count(q),2);assert.equal(q.events.length,0);
+  q.timer()();await q.delay();assert.equal(count(q),2);
 
   const offline=harness({startupPacked:true});
-  await offline.open();offline.timer()();await offline.delay();
-  assert.equal(count(offline),0);assert.equal(offline.events.length,0);
+  await offline.open();
+  assert.equal(count(offline),1);assert.equal(offline.events.length,0);
   await offline.ownerEvent('offline');
-  assert.equal(count(offline),1);assert.equal(offline.events.length,1);
+  assert.equal(count(offline),2);assert.equal(offline.events.length,1);
 });
 
 test('packed and native Graph load a validated owner snapshot without waiting for Live registration',async()=>{
