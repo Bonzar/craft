@@ -640,6 +640,7 @@ def make_server(root, token, port=8829, *, environment='test', queue_origin=None
                         if environment=='prod' and self.has_pause_owner():
                             value = unique_json(page)
                             value['capabilities']['owner_database_clear_post']=True
+                            value['capabilities']['owner_database_clear_legacy_v1']=True
                             value['owner_database_clear_csrf']=csrf_token('ordinary-post',int(clock())+30,
                                                                          'database-clear-post')
                             page=json.dumps(value,separators=(',',':'),allow_nan=False).encode('utf-8')

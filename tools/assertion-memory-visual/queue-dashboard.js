@@ -50,9 +50,9 @@
   let stream,timer,loading=false,dirty=false,generation=0,lastSignal=0, fetchAbort;
   let control, ownerReady=false, ownerCheck, inFlight=false, controlEpoch=0, nativeReady=false, probedRevision=null;
   const rev=value=>typeof value==='string'&&/^[0-9a-f]{32}$/.test(value);
-  const snapshotControl=(stage,value)=>['test','prod'].includes(stage)&&value&&
+  const snapshotControl=(stage,value,capabilities)=>['test','prod'].includes(stage)&&value&&
     typeof value.paused==='boolean'&&rev(value.revision)&&typeof value.can_change==='boolean'
-    ? {stage,paused:value.paused,revision:value.revision,canChange:value.can_change,prepareAllowed:stage==='test'}:null;
+    ? {stage,paused:value.paused,revision:value.revision,canChange:value.can_change,prepareAllowed:capabilities?.standalone_pause===true}:null;
   const offsets=new Map(), rendered=new Map(), lanes=new Map();
   const element=(tag,txt='',name)=>{const e=document.createElement(tag);if(name)e.className=name;if(txt)e.textContent=txt;return e;};
   const labels=(values,k,fallback)=>Object.hasOwn(values,k)?values[k]:fallback;
@@ -392,7 +392,7 @@
     const item=data?.database_clear;
     const legacy=data?.owner_database_clear_csrf;
     const hasLegacy=data!=null&&Object.prototype.hasOwnProperty.call(data,'owner_database_clear_csrf');
-    const acceptsLegacy=data?.stage==='prod'&&typeof legacy==='string'&&/^[0-9]{1,12}\.[0-9a-f]{64}$/.test(legacy);
+    const acceptsLegacy=data?.capabilities?.owner_database_clear_legacy_v1===true&&typeof legacy==='string'&&/^[0-9]{1,12}\.[0-9a-f]{64}$/.test(legacy);
     clearState=['test','prod'].includes(data?.stage)&&data?.capabilities?.owner_database_clear_post===true
       &&(!hasLegacy||acceptsLegacy)
       ? {stage:data.stage,canClear:true,captureRearm:item?.capture_rearm,
@@ -543,8 +543,7 @@
   }
   function acceptControl(data){
     const current=generation, lane=data?.stage;
-    const next=snapshotControl(lane,data?.processing_control);
-    if(next&&data?.capabilities?.standalone_pause===true)next.prepareAllowed=true;
+    const next=snapshotControl(lane,data?.processing_control,data?.capabilities);
     if(control?.stage!==next?.stage||!next?.canChange){ownerReady=false;ownerCheck=null;}
     if(control?.stage!==next?.stage||control?.revision!==next?.revision||!next?.prepareAllowed||next?.canChange)nativeReady=false;
     control=next;
@@ -680,7 +679,7 @@
       queueStage=base.stage;
       acceptClear(base);
       if(base.capabilities?.standalone_pause===true)controlsReady=true;
-      if((base.capabilities?.standalone_queue_sessions===true||base.stage==='test')&&!nativeProbeTried&&!sessionsState){
+      if((base.capabilities?.standalone_queue_sessions===true||base.capabilities?.queue_processing_policy===true)&&!nativeProbeTried&&!sessionsState){
         nativeProbeTried=true;
         void loadSessions(base.capabilities?.standalone_queue_sessions===true);
       }

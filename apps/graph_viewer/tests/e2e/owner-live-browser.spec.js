@@ -9,30 +9,42 @@ import {setTimeout as delay} from 'node:timers/promises';
 const test=baseTest.extend({
   nativeBrowser:async({},use)=>{
     const dir=realpathSync(process.env.GRAPH_BROWSER_FIXTURE);
-    const profile=mkdtempSync(join(dir,'chrome-'));
     const cert=new X509Certificate(readFileSync(join(dir,'cert')));
     const key=createHash('sha256').update(cert.publicKey.export({type:'spki',format:'der'})).digest('base64');
-    // Official system Chrome's normal sandbox remains on. The process has
-    // only a disposable profile and trusts only this fixture's unique TLS key.
-    const chrome=spawn('/opt/google/chrome/chrome',[
-      '--no-first-run','--no-default-browser-check','--disable-background-networking',
-      '--disable-component-update','--disable-default-apps','--disable-sync',
-      '--user-data-dir='+profile,'--remote-debugging-address=127.0.0.1','--remote-debugging-port=0',
-      '--ignore-certificate-errors-spki-list='+key,
-      '--use-gl=angle','--use-angle=swiftshader','--enable-unsafe-swiftshader','about:blank',
-    ],{stdio:'ignore'});
-    let browser;
-    const exited=once(chrome,'exit').catch(()=>{});
+    let browser,chrome,profile,exited,endpoint;
+    async function stop(){
+      if(!chrome)return;
+      if(chrome.exitCode===null&&chrome.signalCode===null)chrome.kill('SIGTERM');
+      await Promise.race([exited,delay(3000)]);
+      if(chrome.exitCode===null&&chrome.signalCode===null)chrome.kill('SIGKILL');
+      await Promise.race([exited,delay(1000)]);
+      if(chrome.exitCode===null&&chrome.signalCode===null)throw new Error('Chrome fixture did not stop');
+      rmSync(profile,{recursive:true,force:true});
+      chrome=null;
+    }
     try{
-      let endpoint;
-      for(let attempt=0;attempt<100&&!endpoint;attempt++){
-        if(chrome.exitCode!==null||chrome.signalCode!==null)break;
-        try{
-          const [port,path]=readFileSync(join(profile,'DevToolsActivePort'),'utf8').split('\n');
-          if(/^[0-9]{4,5}$/.test(port)&&+port<=65535&&/^\/devtools\/browser\/[a-f0-9-]+$/i.test(path))
-            endpoint='ws://127.0.0.1:'+port+path;
-        }catch{}
-        if(!endpoint)await delay(100);
+      // Retry only an unattached browser bootstrap, never a test assertion.
+      for(let launch=0;launch<2&&!endpoint;launch++){
+        profile=mkdtempSync(join(dir,'chrome-'));
+        // The normal Chrome sandbox remains on; trust only fixture-local TLS.
+        chrome=spawn('/opt/google/chrome/chrome',[
+          '--no-first-run','--no-default-browser-check','--disable-background-networking',
+          '--disable-component-update','--disable-default-apps','--disable-sync',
+          '--user-data-dir='+profile,'--remote-debugging-address=127.0.0.1','--remote-debugging-port=0',
+          '--ignore-certificate-errors-spki-list='+key,
+          '--use-gl=angle','--use-angle=swiftshader','--enable-unsafe-swiftshader','about:blank',
+        ],{stdio:'ignore'});
+        exited=once(chrome,'exit').catch(()=>{});
+        for(let attempt=0;attempt<100&&!endpoint;attempt++){
+          if(chrome.exitCode!==null||chrome.signalCode!==null)break;
+          try{
+            const [port,path]=readFileSync(join(profile,'DevToolsActivePort'),'utf8').split('\n');
+            if(/^[0-9]{4,5}$/.test(port)&&+port<=65535&&/^\/devtools\/browser\/[a-f0-9-]+$/i.test(path))
+              endpoint='ws://127.0.0.1:'+port+path;
+          }catch{}
+          if(!endpoint)await delay(100);
+        }
+        if(!endpoint)await stop();
       }
       expect(endpoint,'Sandboxed system Chrome must open an ephemeral loopback DevTools socket').toBeTruthy();
       // Do not let Playwright continuously emulate focus for these real tabs.
@@ -41,13 +53,7 @@ const test=baseTest.extend({
       expect(page).toBeTruthy();
       await use({context,page});
     }finally{
-      try{await browser?.close();}finally{
-        if(chrome.exitCode===null&&chrome.signalCode===null)chrome.kill('SIGTERM');
-        await Promise.race([exited,delay(3000)]);
-        if(chrome.exitCode===null&&chrome.signalCode===null)chrome.kill('SIGKILL');
-        await Promise.race([exited,delay(1000)]);
-        rmSync(profile,{recursive:true,force:true});
-      }
+      try{await browser?.close();}finally{await stop();}
     }
   }
 });
