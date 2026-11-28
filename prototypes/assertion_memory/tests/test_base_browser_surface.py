@@ -79,13 +79,30 @@ class SingleDatabase(TestCase):
                 with patch.object(surface,'LANES',{key:cfg[0] for key,cfg in opts.items()}):
                     with self.assertRaisesRegex(ValueError,'canonical Base lane'):
                         surface.canonical_lane('prod',config=opts['test'][1],private_port=8903)
+                epochs={}
                 for key,c in clients.items():
                     cap=c.get('/api/v1/capabilities').json()
                     self.assertTrue(cap['owner_live_graph_v1'])
+                    self.assertEqual(cap['owner_live_bootstrap'],1)
+                    # Same plaintext endpoint/auth semantics in both deployments;
+                    # each stream must publish only its own database epoch.
+                    from apps.graph_viewer.server.database_generation import database_generation, epoch_name
+                    epochs[key]=epoch_name(database_generation(Path(opts[key][1].db)))
+                    token=opts[key][2]
+                    c.cookies.clear()
+                    self.assertEqual(c.head('/api/v1/events').status_code,401)
+                    c.cookies.set(COOKIE,token)
+                    with patch('apps.graph_viewer.server.owner_snapshot_stream.LIVE_SECONDS',.10):
+                        stream=c.get('/api/v1/events')
+                    self.assertEqual(stream.status_code,200,stream.text)
+                    self.assertIn('event: hello',stream.text)
+                    self.assertIn(epochs[key],stream.text)
+                    self.assertIn('event: reset',stream.text)
                     with patch('apps.graph_viewer.server.owner_graph_stream.LIVE_SECONDS',.10):
                         stream=c.get('/api/v1/events?wire=graph-v1')
                     self.assertEqual(stream.status_code,200,stream.text)
                     self.assertIn('event: hello',stream.text)
+                self.assertNotEqual(epochs['test'],epochs['prod'])
                 def paused(key):
                     cfg=opts[key][1]
                     data=snapshot(cfg,identity=identity,database=Path(cfg.db),interactive_enabled=False,

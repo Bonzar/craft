@@ -91,5 +91,5 @@ def base_browser_app(stage, *, config, private_port, verified_identity, release_
         **({} if machine_devices is None else {'machine_devices':machine_devices}))
     graph=base_graph_component(stage,state,browser=browser,dashboard=test_dashboard,existing_owner_only=True,
                      native_test_dashboard=test_dashboard,
-                     owner_snapshot_events=enabled(dashboard=test_dashboard,browser=browser))
+                     owner_snapshot_events=enabled(browser=browser,stage=stage,graph_source=lane.base.db,public_origin=lane.origin))
     return browser_surface(graph)
