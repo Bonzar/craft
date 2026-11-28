@@ -71,6 +71,30 @@ class ResumeFixture(unittest.TestCase):
         with self.assertRaises((OSError,ValueError)):self.arm()
         self.assertEqual(before,f.messages())
 
+    def test_first_post_resume_visible_agent_turn_needs_card_and_current_time(self):
+        f=self.f
+        f.capture.register(f.store,f.raw,fresh_since=self.cutover)
+        f.poll();self.ended();self.arm()
+        def agent(turn,stamp, namespace='codex_app'):
+            f.append({'type':'event_msg','timestamp':stamp,
+                'payload':{'type':'task_started','turn_id':turn,'root_turn_id':turn,
+                'turn_attribution':{'turn_trigger':'delegation','root_turn_id':turn,
+                                    'parent_turn_id':'other-turn','initiating_agent_path':['agent']}}})
+            f.append({'type':'event_msg','payload':{'type':'item_completed','thread_id':'physical',
+                'turn_id':turn,'item':{'type':'FunctionCallOutput','namespace':namespace,'name':'create_thread',
+                'id':'input-'+turn,'output':'<codex_delegation>\n  <source_thread_id>55c0d244-eaed-4115-ac28-45d14178eb1e</source_thread_id>\n  <input>Visible '+turn+'</input>\n</codex_delegation>'}}})
+            f.assistant('answer '+turn,'answer-'+turn)
+        agent('historical','2025-01-01T23:59:59Z')
+        agent('private','2025-01-02T00:00:00.100000Z','unrelated')
+        self.assertEqual(f.poll()['queued'],0)
+        agent('admitted','2025-01-02T00:00:00.200000Z','codex_tui')
+        self.assertEqual(f.poll()['queued'],2)
+        rows=[m['arguments'] for m in f.messages()]
+        self.assertEqual([m['text'] for m in rows],['Visible admitted','answer admitted'])
+        self.assertEqual([m['role'] for m in rows],['assistant','assistant'])
+        self.assertEqual(rows[0]['_capture_batch'],rows[1]['_capture_batch'])
+        self.assertEqual(f.poll()['queued'],0)
+
     def test_wrong_path_fork_cutover_inode_or_checkpoint_fail_closed(self):
         f=self.f
         f.capture.register(f.store,f.raw,fresh_since=self.cutover)
