@@ -101,7 +101,7 @@ def main(*, prod_owner_api=None):
     parser.add_argument('--embedding-model')
     parser.add_argument('--embedding-cache',type=Path)
     parser.add_argument('--synthetic-fixture',action='store_true')
-    parser.add_argument('--owner-snapshot-events',action='store_true',help='Opt into private same-origin initial snapshot events')
+    parser.add_argument('--owner-snapshot-events',action='store_true',help=argparse.SUPPRESS)
     parser.add_argument('--test-direct-events-origin',help='Optional existing HTTPS/IP route, synthetic TEST only')
     parser.add_argument('--public-origin',help='Expected HTTPS browser origin; forwarded headers remain untrusted')
     parser.add_argument('--allowed-proxy-host',action='append',default=[],help='Explicit upstream bridge hostname; repeatable, independent of browser origin')
@@ -146,7 +146,8 @@ def main(*, prod_owner_api=None):
         model=FastEmbedQueryModel(args.embedding_model,args.embedding_cache)
     try:
         queue_dashboard,browser=configure_owner_lanes(args,prod_owner_api=prod_owner_api or installed_prod_owner_api)
-        owner_snapshot_events=owner_snapshot_enabled(dashboard=queue_dashboard,browser=browser,explicit_test=args.owner_snapshot_events)
+        owner_snapshot_events=owner_snapshot_enabled(browser=browser,stage=args.queue_status_stage,
+            graph_source=args.source,public_origin=args.public_origin)
     except (OSError,ValueError,KeyError,TypeError) as error:
         parser.error(str(error))
     opts=dict(password=password,provider_id=args.provider_id,static_dir=args.static_dir,
