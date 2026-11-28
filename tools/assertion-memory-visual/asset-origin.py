@@ -107,7 +107,7 @@ def unique_json(body):
 
 
 
-def snapshot_queues(queues, limit, offset):
+def snapshot_queues(queues, limit, offset, *, batch_remove=False):
     if not isinstance(queues, list) or len(queues) > 16:
         return False
     ids = set()
@@ -140,7 +140,10 @@ def snapshot_queues(queues, limit, offset):
                 members=row.get('members')
                 if (q['id']!='source' or 'source_count' not in q
                         or not re.fullmatch(r'batch:[a-f0-9]{64}',row['id'])
-                        or 'remove_revision' in row or 'preview_revision' in row
+                        or 'preview_revision' in row
+                        or ('remove_revision' in row and (not batch_remove or row['status'] not in ('ready','paused')
+                            or row['phase']!='extract' or type(row['remove_revision']) is not str
+                            or not REVISION.fullmatch(row['remove_revision'])))
                         or type(row.get('member_count')) is not int or type(members) is not list
                         or not 1<=len(members)==row['member_count']<=128):
                     return False
@@ -169,7 +172,7 @@ def queue_client(origin, key, *, stage='test', disclose_pause=False, graph_ready
             http.request('GET', f'/api/v1/queue-status?limit={limit}&offset={offset}',
                          headers={'Authorization': 'Bearer '+key, 'Accept': 'application/json',
                                   'Connection': 'close',
-                                  **({'X-Memory-Queue-Format':'batch-cards-v1','X-Memory-Queue-Reset-V2':'binding-v2'} if disclose_pause else {})})
+                                  **({'X-Memory-Queue-Format':'batch-cards-v1','X-Memory-Queue-Batch-Remove':'atomic-v1','X-Memory-Queue-Reset-V2':'binding-v2'} if disclose_pause else {})})
             response = http.getresponse()
             if (response.status != 200 or response.headers.get_content_type() != 'application/json'
                     or response.headers.get('Content-Encoding') is not None):
@@ -184,7 +187,7 @@ def queue_client(origin, key, *, stage='test', disclose_pause=False, graph_ready
                     or not re.fullmatch(r'assertion-memory-v[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9.-]+)?', value['release_version'])
                     or not isinstance(value['release_generation'], str) or not HEX.fullmatch(value['release_generation'])
                     or not isinstance(value['snapshot_at'], str) or len(value['snapshot_at']) > 64
-                    or value['global_order'] is not False or not snapshot_queues(value['queues'],limit,offset)
+                    or value['global_order'] is not False or not snapshot_queues(value['queues'],limit,offset,batch_remove=disclose_pause)
                     or not isinstance(ctl, dict) or set(ctl) != {'paused', 'revision', 'can_change'}
                     or type(ctl['paused']) is not bool or type(ctl['can_change']) is not bool
                     or not isinstance(ctl['revision'], str) or not re.fullmatch(r'[0-9a-f]{32}',ctl['revision'])):
