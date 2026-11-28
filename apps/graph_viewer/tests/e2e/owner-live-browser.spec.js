@@ -1,5 +1,5 @@
 import {test as baseTest,expect,chromium} from '@playwright/test';
-import {readFileSync,realpathSync,mkdtempSync,rmSync} from 'node:fs';
+import {readFileSync,realpathSync,mkdtempSync,rmSync,existsSync} from 'node:fs';
 import {createHash,X509Certificate} from 'node:crypto';
 import {once} from 'node:events';
 import {join} from 'node:path';
@@ -394,6 +394,7 @@ test('packed owner cancels or confirms the deletion of a complete pending batch'
   await expect(card).toBeVisible();
   await remove.click();
   await queue.getByRole('button',{name:'Отмена',exact:true}).click();
+  expect(existsSync(join(base,'batch-deletion.json'))).toBe(false);
   await expect(card).toBeVisible();
   await remove.click();
   await confirm.click();
