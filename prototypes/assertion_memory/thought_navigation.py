@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from . import query_timing as timing
 from .model import ModelContextExceeded, ModelError
 from .thought_engine_contract import exact_fields, semantic_text
 from .thought_source_policy import thought_eligibility
@@ -165,6 +166,7 @@ def _adjacent(engine, thought):
                     + link['meaning']}
 
 
+@timing.timed('relation_neighborhood')
 def neighborhood(engine, thought, question):
     """Full direct +1 material and separate compact semantic/code catalogs.
 
