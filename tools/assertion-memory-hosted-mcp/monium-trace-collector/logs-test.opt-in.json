@@ -1,0 +1,11 @@
+{
+  "processors": {
+    "filter/logs_lane": {
+      "error_mode": "propagate",
+      "log_conditions": [
+        "resource.attributes[\"service.name\"] != \"assertion-memory-test\"",
+        "resource.attributes[\"deployment.environment.name\"] != \"test\""
+      ]
+    }
+  }
+}
