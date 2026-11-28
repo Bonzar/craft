@@ -12,6 +12,8 @@ local stages = values([[
     provider_retry_signal trace_request_write trace_response_write navigation
     draft_generation readiness_check answer_verification other_model gap_search
     answer_neighborhood model_contract_validation query_outcome vm_http_submission
+    answer_check_write answer_persist model_step_replay query_response_wait
+    ready_result_persist relation_frontier relation_neighborhood sufficiency
 ]])
 local statuses = values("start ok failed timeout interrupted partial ready queued reused miss unavailable connection_signal retry_signal")
 local phases = values("navigation draft_generation readiness_check answer_verification other_model")

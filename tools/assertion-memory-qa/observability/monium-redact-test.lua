@@ -24,3 +24,17 @@ fake.signal_count=-1
 fake.model_phase="raw text"
 local _,_,filtered=project_memory_query_timing("memory.query.timing",123,fake)
 assert(not filtered.duration_ms and not filtered.signal_count and not filtered.model_phase)
+for _,stage in ipairs({"answer_check_write","answer_persist","model_step_replay","query_response_wait",
+    "ready_result_persist","relation_frontier","relation_neighborhood","sufficiency"}) do
+    local sample=good()
+    sample.stage=stage
+    sample.exception="must not export"
+    sample.request_body="must not export"
+    local code,_,projected=project_memory_query_timing("memory.query.timing",123,sample)
+    assert(code==2, "expected timing stage: "..stage)
+    assert(projected.stage==stage and projected.message=="memory_query_timing")
+    assert(not projected.exception and not projected.request_body and not projected.MESSAGE)
+end
+local impersonated=good()
+impersonated.stage="sufficiency.payload"
+assert(project_memory_query_timing("memory.query.timing",123,impersonated)==-1)
