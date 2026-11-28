@@ -3,7 +3,7 @@ import hashlib
 import json
 import re
 
-from .capture_batch import active_member
+from .capture_batch import BATCH_ID, MAX_MEMBERS, active_member, batch_table_exists, digest
 from .processing_control import Conflict
 from .queue_session_control import _exists
 
@@ -52,13 +52,70 @@ def check_request(queue_id,item_id):
         raise ValueError('Invalid queue item identity')
 
 
-def annotate(db,data):
+def _batch_state(db, item_id):
+    prefix, sep, batch_id = item_id.partition(':')
+    if (prefix != 'batch' or not sep or not BATCH_ID.fullmatch(batch_id)
+            or not batch_table_exists(db)):
+        return None
+    batch = db.execute("SELECT stream_id,session_id,member_digest,request_digest FROM memory_capture_batches "
+                       "WHERE batch_id=? AND state='pending'", (batch_id,)).fetchone()
+    if batch is None:
+        return None
+    rows = db.execute(
+        "SELECT m.ordinal,m.event_id,CASE WHEN json_valid(e.metadata) THEN json_extract(e.metadata,'$.message_id') END,"
+        "j.status,j.lease_token,j.lease_until,j.event_id,j.phase,j.attempts,j.updated_at,j.available_at "
+        "FROM memory_capture_batch_members m LEFT JOIN memory_raw_events e ON e.id=m.event_id "
+        "LEFT JOIN memory_capture_jobs j ON j.id=m.event_id "
+        "WHERE m.batch_id=? ORDER BY m.ordinal LIMIT ?", (batch_id, MAX_MEMBERS+1)).fetchall()
+    if not 1 <= len(rows) <= MAX_MEMBERS or digest([r[2] for r in rows]) != batch[2]:
+        return None
+    members = []
+    for ordinal, row in enumerate(rows):
+        if row[0] != ordinal:
+            return None
+        rev = revision(tuple(row)[3:], 'source', row[1])
+        if rev is None:
+            return None
+        members.append((row[1], rev))
+    rev = digest(['owner-pending-batch-cancel-v1',item_id,*batch,members])[:32]
+    return batch_id, rev, members
+
+
+def _remove_batch(db, *, stage, item_id, expected_revision, now):
+    pending = _batch_state(db, item_id)
+    if pending is None or pending[1] != expected_revision:
+        raise Conflict('Queue batch changed or cannot be cancelled')
+    batch_id, _, members = pending
+    # The single-item guard deliberately stays intact. Remove this exact
+    # membership only after atomically claiming the whole pristine batch.
+    db.execute('SAVEPOINT remove_pending_capture_batch')
+    try:
+        claimed = db.execute("UPDATE memory_capture_batches SET state='cancelled',error_code='owner_cancelled' "
+                             "WHERE batch_id=? AND state='pending'", (batch_id,))
+        if claimed.rowcount != 1 or db.execute('DELETE FROM memory_capture_batch_members WHERE batch_id=?',
+                                               (batch_id,)).rowcount != len(members):
+            raise Conflict('Queue batch changed')
+        for source_id, rev in members:
+            remove(db, stage=stage, queue_id='source', item_id=source_id, expected_revision=rev, now=now)
+    except BaseException:
+        db.execute('ROLLBACK TO remove_pending_capture_batch')
+        raise
+    finally:
+        db.execute('RELEASE remove_pending_capture_batch')
+    # Keep the cancelled envelope as a replay fence and retain only the
+    # existing minimal delivery tombstones for each removed source.
+    return dict(stage=stage,queue_id='source',item_id=item_id,removed=True,effect='source_and_queue')
+
+
+def annotate(db,data,*,batch_remove=False):
     for queue in data['queues']:
         q=queue['id']
         if q not in QUEUES:
             continue
         for item in queue['items']:
             if q=='source' and 'members' in item:
+                if batch_remove and (pending:=_batch_state(db,item['id'])) is not None:
+                    item['remove_revision']=pending[1]
                 for member in item['members']:
                     if (preview:=preview_revision(_state(db,q,member['id']),member['id'],active_batch=True)) is not None:
                         member['preview_revision']=preview
@@ -123,6 +180,8 @@ def remove(db,*,stage,queue_id,item_id,expected_revision,now):
     if stage not in ('test','prod') or not db.in_transaction:
         raise ValueError('Invalid TEST queue transaction')
     check_request(queue_id,item_id)
+    if queue_id=='source' and item_id.startswith('batch:'):
+        return _remove_batch(db,stage=stage,item_id=item_id,expected_revision=expected_revision,now=now)
     if queue_id=='source' and active_member(db,item_id):
         raise Conflict('Active raw batch cannot be removed one item at a time')
     row=_state(db,queue_id,item_id)
