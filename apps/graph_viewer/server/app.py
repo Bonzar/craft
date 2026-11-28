@@ -21,6 +21,7 @@ from .search import search
 from .direct_stream import configure_test,TICKET_PATH,DIRECT_PATH,issue_ticket,direct_events
 from .owner_snapshot_stream import enabled_owner as snapshot_owner, owner_snapshot_events
 from .owner_graph_stream import owner_graph_events,graph_cache_fields
+from .graph_response_start import GraphResponseStart,GraphResponseTimings
 
 
 class Boundary(BaseHTTPMiddleware):
@@ -348,6 +349,7 @@ async def capabilities(request):
     if (request.app.state.owner_graph_stream is True
             and request.app.state.owner.session(request) is not None):
         value['owner_live_graph_v1']=True
+        value['owner_live_response_timing']=request.app.state.graph_response_timings.summary()
     value['live_profile']=list(request.app.state.manager.live_profiles)
     value['preparation']={'pending':len(request.app.state.manager.preparing),'ready_snapshots':len(request.app.state.manager.graphs),'semantic_pending':len(request.app.state.manager.semantic_jobs)}
     return JSONResponse(value)
@@ -481,8 +483,10 @@ def create_app(source_path, state_dir, *, password=None, provider_id='assertion-
         logging.getLogger(__name__).warning('request_failed route=%s error_type=%s',request.scope.get('route').path if request.scope.get('route') else 'unmatched',type(error).__name__)
         return error_response(APIError('service_unavailable','Requested data is temporarily unavailable',503))
     routes=make_routes(browser_owner_api)
+    timings=GraphResponseTimings()
     app=Starlette(routes=routes,lifespan=lifespan,exception_handlers={APIError:handle_error,Exception:unavailable},
-                  middleware=[Middleware(Boundary),Middleware(GZipMiddleware,minimum_size=1500)])
+                  middleware=[Middleware(GraphResponseStart,timings=timings),Middleware(Boundary),Middleware(GZipMiddleware,minimum_size=1500)])
+    app.state.graph_response_timings=timings
     app.state.public_origin=browser_origin
     app.state.owner_snapshot_events=owner_snapshot_events
     # Feature availability belongs to the authenticated Graph contract, not rollout.

@@ -11,6 +11,7 @@ import stat
 import time
 
 from starlette.responses import StreamingResponse
+from .graph_response_start import admit as admit_response_start_timing
 from .auth import COOKIE
 from .common import APIError,selector
 from .database_generation import epoch_name
@@ -322,6 +323,7 @@ async def owner_graph_events(request):
     selected,resume=parse_start(request)
     if request.method!='GET':
         raise APIError('method_not_allowed','Graph data stream requires GET',405)
+    admit_response_start_timing(request.scope)
     slots=request.app.state.owner_snapshot_slots
     if slots.locked():
         raise APIError('rate_limited','Owner stream busy',429)
