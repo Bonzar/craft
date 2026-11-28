@@ -67,7 +67,7 @@ def nginx_delta(source):
     block+='    proxy_pass_request_headers off;\n'
     block+=f'    proxy_set_header Host {TEST_HOST};\n'
     block+=''.join(f'    proxy_set_header {k} {v};\n' for k,v in WIRE.items())
-    block+='    proxy_set_header Connection "";\n    proxy_http_version 1.1;\n    proxy_cache off;\n'
+    block+='    proxy_set_header Connection "";\n    proxy_http_version 1.1;\n    proxy_buffering off;\n    proxy_cache off;\n'
     block+='    rewrite ^/__mvt(/api/v1/.*)$ $1 break;\n    proxy_pass http://127.0.0.1:8891;\n}\n'
     for lo,hi in reversed(regions):
         source=source[:lo]+source[hi:]

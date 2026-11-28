@@ -31,6 +31,7 @@ class TestTestCarrier(unittest.TestCase):
             pair=plan.plan(NGINX,raw,gateway_sha=plan.spec_sha(raw),verified_backend=True,verified_old_deny=True)
         nginx,gate=pair['after']
         self.assertEqual(nginx.count('location ^~ /__mvt/api/v1/'),1)
+        self.assertIn("    proxy_http_version 1.1;\n    proxy_buffering off;\n",nginx)
         self.assertNotIn('127.0.0.1:8829',nginx)
         self.assertIn('proxy_pass http://127.0.0.1:8891;',nginx)
         self.assertIn('proxy_set_header Origin $http_origin;',nginx)
