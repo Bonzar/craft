@@ -68,7 +68,7 @@ def base_browser_app(stage, *, config, private_port, verified_identity, release_
                 or not callable(test_dashboard.activation)
                 or machine_devices is not None or private_owner_queue is not None):
             raise ValueError('Wrong existing TEST Base scheduler projection')
-        browser=configured_browser_api(test_dashboard,ordinary_test_clear=True)
+        browser=configured_browser_api(test_dashboard,ordinary_test_clear=True,native_test_batch_removal=True)
     else:
         if stage=='test':
             raise ValueError('Canonical TEST Base scheduler projection required')

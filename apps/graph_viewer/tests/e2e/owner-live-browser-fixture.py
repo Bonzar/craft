@@ -85,8 +85,7 @@ def packed_batch_fixture(run, static, cert, key):
     from prototypes.assertion_memory.capture_batch import capture, authorized_machine_batch
     from prototypes.assertion_memory.machine_device_registry import MachineDeviceRegistry
     from prototypes.assertion_memory.mcp_server import ServiceConfig
-    from prototypes.assertion_memory.queue_owner_domain import owner_operations
-    from prototypes.assertion_memory.queue_rest import snapshot
+    from apps.graph_viewer.server.browser_owner_api import configured_browser_api
     from prototypes.assertion_memory.storage import MemoryStore
 
     db = run / 'batch.sqlite3'
@@ -104,7 +103,12 @@ def packed_batch_fixture(run, static, cert, key):
         with authorized_machine_batch():
             capture(service, batch_id, packet)
 
-    apply_owner = owner_operations(database=db, release_lease=nullcontext, identity=identity, stage='test')
+    dashboard = SimpleNamespace(stage='test', db=db, release_lease=nullcontext,
+                                metadata=lambda: dict(release_version=identity()[0], generation=identity()[1],
+                                                      processing_session_ids=[], auto_process_fresh_mac=False,
+                                                      model_configured=False, interactive_enabled=False))
+    browser = configured_browser_api(dashboard, ordinary_test_clear=True, native_test_batch_removal=True)
+    apply_owner = browser.perform
     def perform(action, args):
         result = apply_owner(action, args)
         if action == 'item_remove':
@@ -124,16 +128,11 @@ def packed_batch_fixture(run, static, cert, key):
             receipt.replace(run / 'batch-deletion.json')
         return result
 
-    def project(*, limit, offset):
-        return snapshot(config, identity=identity, database=db, interactive_enabled=False,
-                        limit=limit, offset=offset, lane='test', can_change=True,
-                        batch_cards=True, batch_remove=True)
-
     sock = socket.socket()
     sock.bind(('127.0.0.1', 0))
     sock.listen(16)
     port = sock.getsockname()[1]
-    browser = BrowserOwnerAPI(stage='test', perform=perform, queue_snapshot=project, dashboard_live=False)
+    browser.perform = perform
     registry = MachineDeviceRegistry.initialize(run / 'qa-managed-devices.sqlite3', 'test')
     browser.attach_machine_devices(registry, nullcontext, identity)
     app = create_app(db, run / 'batch-state', password='synthetic-only-owner',
