@@ -509,3 +509,75 @@ test('packed owner enrolls and revokes a device without sharing its key',async({
   await expect(item).toHaveCount(0);
   expect((await readRegistry()).items).toEqual([]);
 });
+
+test('packed TEST owner explicitly confirms removal through native writer',async({nativeBrowser:{context,page}})=>{
+  test.skip(process.env.GRAPH_BROWSER_VARIANT!=='packed','actual node confirmation is a packed overlay');
+  const dir=realpathSync(process.env.GRAPH_BROWSER_FIXTURE);
+  expect(existsSync(join(dir,'preview-port'))).toBe(false);
+  const port=Number(readFileSync(join(dir,'delete-fixture-port'),'utf8'));
+  expect(Number.isInteger(port)&&port>1024&&port<65536).toBe(true);
+  const origin='https://127.0.0.1:'+port;
+  const pins=JSON.parse(readFileSync(join(dir,'delete-test-pins'),'ascii'));
+  const effect='/api/v1/processing/graph-nodes/remove';
+  const entry=new URL('/visual/',origin);
+  entry.searchParams.set('kind','node');
+  entry.searchParams.set('id',pins.target);
+  const transitions=[];
+  await context.route('**/*',route=>{
+    const url=new URL(route.request().url());
+    return url.origin===origin||['about:','blob:','data:'].includes(url.protocol)?route.continue():route.abort();
+  });
+  const api=async(path)=>page.evaluate(async path=>{
+    const r=await fetch(path,{cache:'no-store'});
+    return {status:r.status,data:await r.json()};
+  },path);
+  page.on('request',r=>{
+    const url=new URL(r.url());
+    if(url.origin===origin&&(url.pathname===effect||url.pathname===effect+'/prepare'))transitions.push(r.method());
+  });
+  await page.goto(entry.href);
+  const remove=page.getByRole('button',{name:'Удалить мысль',exact:true});
+  await expect(remove).toHaveCount(0);
+  await page.locator('#password').fill('synthetic-only-owner');
+  await page.locator('#login-button').click();
+  await expect(page.locator('#reader .assertion-text')).toHaveText('Fictional thought for confirmed deletion');
+  const cap=await api('/api/v1/capabilities');
+  expect(cap.data.owner_graph_node_removal).toEqual({version:1,stage:'test'});
+  expect(cap.data.capabilities.owner_machine_devices_v1).not.toBe(true);
+  const graph=await api('/api/v1/graph');
+  expect(graph.status).toBe(200);
+  const initial=graph.data.revision;
+  const target='/api/v1/nodes/'+encodeURIComponent(pins.target);
+  const at=(path,revision)=>path+'?revision='+encodeURIComponent(revision);
+  const waitEffect=(method,path)=>page.waitForResponse(r=>r.url()===origin+path&&r.request().method()===method);
+  const confirm=page.getByRole('button',{name:'Подтвердить удаление',exact:true});
+  const prepare=waitEffect('POST',effect+'/prepare');
+  await remove.click();
+  expect((await prepare).status()).toBe(200);
+  await expect(confirm).toBeVisible();
+  expect((await api(at(target,initial))).status).toBe(200);
+  expect(transitions).toEqual(['POST']);
+  await page.getByRole('button',{name:'Отмена',exact:true}).click();
+  await expect(remove).toBeVisible();
+  expect(transitions).toEqual(['POST']);
+  const reacquire=waitEffect('POST',effect+'/prepare');
+  await remove.click();
+  expect((await reacquire).status()).toBe(200);
+  const commit=waitEffect('PUT',effect);
+  await confirm.click();
+  const response=await commit;
+  expect(response.status()).toBe(200);
+  const result=await response.json();
+  expect(result).toMatchObject({stage:'test',thought_id:pins.thought,thought_version:pins.version,removed:true});
+  expect(result.source_revision).not.toBe(pins.initial_source_revision);
+  expect(transitions).toEqual(['POST','POST','PUT']);
+  await expect.poll(async()=>{
+    const next=await api('/api/v1/graph');
+    return next.status===200&&typeof next.data.revision==='string'&&next.data.revision!==initial;
+  }).toBe(true);
+  const current=await api('/api/v1/graph');
+  expect(current.status).toBe(200);
+  expect(current.data.source_revision).not.toBe(graph.data.source_revision);
+  expect((await api(at(target,current.data.revision))).status).toBe(404);
+  expect((await api(at('/api/v1/nodes/'+encodeURIComponent(pins.survivor),current.data.revision))).status).toBe(200);
+});

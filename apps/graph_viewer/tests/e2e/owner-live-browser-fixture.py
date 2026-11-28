@@ -155,6 +155,60 @@ def packed_batch_fixture(run, static, cert, key):
     return server, thread, sock
 
 
+def confirmed_delete_fixture(run, static, cert, key):
+    from unittest.mock import patch
+    from apps.graph_viewer.server import queue_dashboard
+    from apps.graph_viewer.server.browser_owner_api import configured_browser_api
+    from apps.graph_viewer.server.graph_node_owner_api import bind_native_test_writer
+    from prototypes.assertion_memory.dashboard_projection import projection_path
+    from prototypes.assertion_memory.storage import MemoryStore
+    from prototypes.assertion_memory.thought_runtime import initialize_empty
+    from prototypes.assertion_memory.thought_store import ThoughtStore
+    from prototypes.assertion_memory.thought_graph import export_graph
+
+    db = run / 'confirmed-delete.sqlite3'
+    with MemoryStore(db) as storage:
+        initialize_empty(storage)
+        thoughts = ThoughtStore(storage)
+        target = thoughts.publish('Fictional thought for confirmed deletion')
+        survivor = thoughts.publish('Unrelated fictional thought')
+        graph = export_graph(thoughts)
+        nodes = {n['thought_ref']['thought_id']: n['id'] for n in graph['nodes']}
+    (run / 'delete-test-pins').write_text(json.dumps({
+        'target': nodes[target.id], 'thought': target.id, 'version': target.version,
+        'survivor': nodes[survivor.id], 'initial_source_revision': graph['source_revision'],
+    }), encoding='ascii')
+    sock = socket.socket()
+    sock.bind(('127.0.0.1', 0))
+    sock.listen(16)
+    port = sock.getsockname()[1]
+    origin = f'https://127.0.0.1:{port}'
+    with (patch.dict(queue_dashboard.SCOPES, {'test': ('assertion-test-deploy', db)}),
+          patch('pwd.getpwnam', return_value=SimpleNamespace(pw_uid=994))):
+        dashboard = queue_dashboard.HostedQueueDashboard(
+            'test', projection_path('test'), db, activation=lambda: ('a'*40, 'b'*64))
+    dashboard.release_lease = nullcontext
+    dashboard.metadata = lambda: {'release_version': 'synthetic-release', 'generation': '8'*64}
+    browser = configured_browser_api(dashboard)
+    bind_native_test_writer(browser, dashboard)
+    app = create_app(db, run / 'delete-owner-state', password='synthetic-only-owner',
+                     browser_owner_api=browser, public_origin=origin, synthetic_fixture=True)
+    frontend = StaticFiles(directory=static, html=True)
+    async def ingress(scope, receive, send):
+        if scope['type'] == 'http' and scope['path'].startswith('/visual/'):
+            path = scope['path'][len('/visual'):]
+            await frontend({**scope, 'path': path, 'raw_path': path.encode('ascii')}, receive, send)
+        else:
+            await app(scope, receive, send)
+    server = uvicorn.Server(uvicorn.Config(ingress, ssl_keyfile=str(key), ssl_certfile=str(cert),
+                                           host='127.0.0.1', port=port, proxy_headers=False, access_log=False))
+    thread = Thread(target=server.run, kwargs={'sockets': [sock]}, daemon=True)
+    thread.start()
+    (run / 'delete-fixture-port').write_text(str(port), encoding='ascii')
+    return server, thread, sock
+
+
+
 if __name__ == '__main__':
     run = Path(sys.argv[1]).resolve()
     run.mkdir(mode=0o700, exist_ok=False)
@@ -198,6 +252,7 @@ if __name__ == '__main__':
 
         preview = canonical_preview_fixture(run, static, cert, key) if variant == 'native' else None
         batch = packed_batch_fixture(run, static, cert, key) if variant == 'packed' else None
+        packed_delete = confirmed_delete_fixture(run, static, cert, key) if variant == 'packed' else None
         (run / 'fixture-port').write_text(str(port), encoding='ascii')
         try:
             uvicorn.Server(uvicorn.Config(
@@ -205,7 +260,7 @@ if __name__ == '__main__':
                 port=port, proxy_headers=False, log_level='warning', access_log=False,
             )).run(sockets=[sock])
         finally:
-            for fixture_server in (preview, batch):
+            for fixture_server in (preview, batch, packed_delete):
                 if fixture_server is not None:
                     server, thread, fixture_socket = fixture_server
                     server.should_exit = True
