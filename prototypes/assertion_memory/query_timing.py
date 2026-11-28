@@ -20,7 +20,7 @@ STAGES = frozenset(('submission', 'ready_probe', 'queue_wait', 'job_total', 'res
     'navigation', 'draft_generation', 'readiness_check', 'answer_verification', 'other_model',
     'gap_search', 'answer_neighborhood', 'model_contract_validation', 'query_outcome',
     'vm_http_submission', 'query_response_wait', 'answer_persist', 'answer_check_write',
-    'model_step_replay', 'ready_result_persist'))
+    'model_step_replay', 'ready_result_persist', 'sufficiency', 'relation_neighborhood', 'relation_frontier'))
 # Journal-only measurements gain one OTLP record here. Ordinary timing.span
 # already exports independently; do not add its stages to this set.
 _MEASURED = frozenset(('submission', 'ready_probe', 'queue_wait', 'result_persist',
