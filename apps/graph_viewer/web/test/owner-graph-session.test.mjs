@@ -177,3 +177,58 @@ test('rejected warm delta recovers with one cold SSE while retaining the same ac
   assert.deepEqual([...accepted.positions],[1,2,3]);
   c.close();
 });
+
+test('a warm renderer stays put when hello arrives but initial data stalls, then resumes on one new stream',async()=>{
+  let callbacks,signal,fire,retry,reads=0;const timing=[],states=[],requests=[];
+  const accepted={...warm,visualPositions:new Float32Array([1,2,3])};
+  const c=openOwnerGraphSession({selector:{mode:'current'},scope:'scope',verifiedEpoch:e,
+    cache:{take:async()=>accepted,clear:async()=>assert.fail('valid snapshot was cleared')},
+    onCached:async value=>value,onReset:async()=>assert.fail('valid snapshot was hidden'),
+    read:async x=>{
+      ++reads;requests.push(x.checkpoint);callbacks=x;signal=x.signal;
+      await new Promise((_,reject)=>signal.addEventListener('abort',()=>reject(Error('aborted')),{once:true}));
+    },
+    onState:s=>states.push(s),onAttempt:x=>timing.push(x),
+    startDeadline:(fn,ms)=>{fire={fn,ms};return fire;},clearDeadline:handle=>{if(fire===handle)fire=null;},
+    schedule:fn=>{retry=fn;return 1;},cancel(){}});
+  try{
+    await c.initial;
+    callbacks.onHeaders();callbacks.onFirstFrame();
+    await callbacks.onEvent('hello',{epoch:e,protocol:'graph-v1'});
+    assert.ok(fire?.ms>0,'hello without usable state remains bounded');
+    await callbacks.onEvent('heartbeat',{});
+    fire.fn();await settle();
+    assert.equal(signal.aborted,true);
+    assert.equal(timing.at(-1).outcome,'initial-state-timeout');
+    assert.notEqual(timing.at(-1).hello_ms,null);
+    assert.equal(states.at(-1),'snapshot-offline');
+    retry();await settle();
+    assert.equal(reads,2);
+    assert.deepEqual(requests,[accepted,accepted]);
+    assert.deepEqual([...accepted.visualPositions],[1,2,3]);
+    assert.equal(states.includes('live'),false);
+  }finally{c.close();}
+});
+
+test('valid progress extends first usable state timer but heartbeat alone does not, then caught-up ends it',async()=>{
+  let receive,deadline; const states=[];
+  const c=openOwnerGraphSession({selector:{mode:'current'},scope:'scope',verifiedEpoch:e,
+    cache:{take:async()=>warm,save:async()=>{}},onCached:async x=>x,onDelta:async x=>x,
+    read:async ({onEvent,signal})=>{receive=onEvent;await new Promise(resolve=>signal.addEventListener('abort',resolve,{once:true}));},
+    onState:x=>states.push(x),
+    startDeadline:fn=>{deadline={fn};return deadline;},clearDeadline:handle=>{if(deadline===handle)deadline=null;}});
+  try{
+    await c.initial;
+    await receive('hello',{epoch:e,protocol:'graph-v1'});
+    const afterHello=deadline;
+    assert.ok(afterHello);
+    await receive('heartbeat',{});
+    assert.equal(deadline,afterHello);
+    await receive('delta',{epoch:e,revision:next,base_revision:r,cursor:'6'});
+    assert.ok(deadline);
+    assert.notEqual(deadline,afterHello);
+    await receive('caught-up',{epoch:e,revision:next,cursor:'6'});
+    assert.equal(states.at(-1),'live');
+    assert.equal(deadline,null);
+  }finally{c.close();}
+});
