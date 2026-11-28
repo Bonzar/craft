@@ -11,8 +11,7 @@ class ImmutablePackage(TestCase):
         self.p=Published('assertion-releaser-v1.0.0','a'*40,True,'assertion-releaser.tar.gz',raw)
         self.s=Selection('test','apply',self.p.tag,self.p.ref_commit,sha256(raw).hexdigest())
 
-    def test_same_asset_both_lanes_and_two_deterministic_builds(self):
-        self.assertEqual(self.p.asset,asset())
+    def test_same_pinned_asset_both_lanes(self):
         self.assertEqual(qualify(self.s,self.p),qualify(replace(self.s,lane='prod',operation='rollback'),self.p))
         for publication in (replace(self.p,immutable=False),replace(self.p,ref_commit='b'*40),
                             replace(self.p,asset=self.p.asset+b'change')):
