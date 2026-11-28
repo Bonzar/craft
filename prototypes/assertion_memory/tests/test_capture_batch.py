@@ -168,7 +168,8 @@ class CaptureBatchTest(unittest.TestCase):
                                                'text':'Equivalent' if repeated else 'Office fact omitted',
                                                'discard_drafts': []})
                         self.assertEqual(request.task,'Verify thought')
-                        self.assertIn('Your scope here is local entailment',request.instructions)
+                        self.assertIn('against its own selected original fragments',request.instructions)
+                        self.assertNotIn('Check two independent obligations',request.instructions)
                         self.assertNotIn('proposed_thoughts',request.records[0])
                         return json.dumps({'verdict':'accept','text':'Supported locally'})
                     with patch.object(ServiceConfig,'components',lambda *_:(model,None,'fixture')):
@@ -193,6 +194,92 @@ class CaptureBatchTest(unittest.TestCase):
         self.assertEqual(self.status()[0],'pending')
         self.assertTrue(all(self.service.queue.get(e).attempts==0 for e in events))
 
+    def test_capture_preserves_attributed_delivery_and_exact_reference(self):
+        link = 'https://example.invalid/tracking/synthetic-parcel'
+        inputs = [
+            ('user', f'The display kit is due Friday. Track its arrival at {link}'),
+            ('user', 'The display kit is now in transit, according to my update.'),
+            ('user', 'I am guessing the carrier used a bicycle.'),
+            ('assistant', 'I measured the display stand at 18 centimeters.'),
+        ]
+        expected = [
+            'The user expects the display kit Friday and supplied a tracking link.',
+            'The user reported that the display kit is now in transit.',
+            'The carrier used a bicycle.',
+            'The assistant reported measuring the display stand at 18 centimeters.',
+        ]
+        first = self.messages[0]
+        rows = [
+            first | {'message_id': f'synthetic-{i}', 'role': role,
+                     'actor_id': 'fiction-user' if role == 'user' else 'assistant',
+                     'text': text, 'delivery': first['delivery'] | {'seq': i}}
+            for i, (role, text) in enumerate(inputs, 1)
+        ]
+        receipts = self.capture(rows)['receipts']
+        calls = []
+
+        def model(request):
+            calls.append(request.task)
+            if request.task == 'Construct thoughts for multiple source messages':
+                return json.dumps({
+                    case['source']: {'thoughts': [{
+                        'text': text, 'question': None,
+                        'support_fragments': [
+                            fragment['option']
+                            for row in case['records'] if row['role'] == 'source'
+                            for fragment in row['fragments']
+                        ],
+                    }], 'needs_detail': None}
+                    for case, text in zip(request.records[1:], expected, strict=True)
+                })
+            if request.task == 'Verify source thought batch':
+                self.assertIn('Uncertainty about one claim is not a missing qualification of another',
+                              request.instructions)
+                return json.dumps({'verdict': 'accept', 'text': 'Covered after discard.',
+                                   'discard_drafts': [{'source': 'source_3', 'index': 0}]})
+            self.assertEqual(request.task, 'Verify thought')
+            self.assertIn('Preserve the meaning, attribution, scope, timing and degree of certainty',
+                          request.instructions)
+            self.assertNotIn('Check two independent obligations', request.instructions)
+            draft = next(row['text'] for row in request.records if row['role'] == 'draft')
+            self.assertIn(draft, [expected[i] for i in (0, 1, 3)])
+            return json.dumps({'verdict': 'accept', 'text': 'Supported by the attributed source.'})
+
+        with patch.object(ServiceConfig, 'components', lambda *_: (model, None, 'fixture')):
+            run_worker(self.config)
+        self.assertEqual(self.status()[0], 'completed')
+        self.assertEqual(calls.count('Verify thought'), 3)
+        saved = {thought.text: thought for thought in self.service.thoughts.list_thoughts()}
+        self.assertEqual(set(saved), {expected[i] for i in (0, 1, 3)})
+        for i in (0, 1, 3):
+            event_id = receipts[i]['event']['id']
+            self.assertEqual({basis['event_id'] for basis in saved[expected[i]].bases}, {event_id})
+        event = self.service.queue.get_event(receipts[0]['event']['id'])
+        self.assertEqual(event.prompt, inputs[0][1])
+        self.assertIn(link, event.prompt)
+        self.assertNotIn(link, saved[expected[0]].text)
+
+    def test_capture_local_rejection_keeps_atomic_publication_blocked(self):
+        self.capture()
+        calls=[]
+        respond=self.model(calls)
+
+        def model(request):
+            if request.task == 'Verify thought' and any(
+                    row.get('role') == 'draft' and row['text'] == self.messages[1]['text']
+                    for row in request.records):
+                self.assertIn('against its own selected original fragments',request.instructions)
+                self.assertNotIn('Check two independent obligations',request.instructions)
+                calls.append(request.task)
+                return json.dumps({'verdict':'reject','text':'Draft not established by local evidence.'})
+            return respond(request)
+
+        with patch.object(ServiceConfig,'components',lambda *_:(model,None,'fixture')):
+            run_worker(self.config)
+        self.assertEqual(calls.count('Verify thought'),2)
+        self.assertEqual(tuple(self.status()),('blocked','batch_SemanticReviewRejected'))
+        self.assertEqual(self.service.thoughts.list_thoughts(),[])
+
     def test_local_subset_rejection_rechecks_once_and_never_reconstructs(self):
         first, second = self.messages
         receipts=self.capture([first|{'text':'Only comedy for the current outing.'},second|{'text':'Understood.'}])['receipts']
@@ -205,6 +292,8 @@ class CaptureBatchTest(unittest.TestCase):
                     {'text':'User chose theatre as well.','question':None,'support_fragments':[0]}],
                     'needs_detail':None},'source_2':{'thoughts':[],'needs_detail':None}})
             if request.task=='Verify thought':
+                self.assertIn('Use null for the missing_meaning schema field',request.instructions)
+                self.assertNotIn('Check coverage across the current source',request.instructions)
                 return json.dumps({'verdict':'reject','text':'one draft unsupported',
                                    'rejected_drafts':[{'draft':1,'text':'No theatre in source'}],
                                    'missing_meaning':None})
