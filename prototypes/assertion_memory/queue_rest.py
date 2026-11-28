@@ -67,7 +67,7 @@ def exact_database(db):
     return info.st_dev,info.st_ino
 
 
-def snapshot(config, *, identity, database, interactive_enabled, limit, offset, lane='test',can_change=False,session_control=False,batch_cards=False,clear_ready=False):
+def snapshot(config, *, identity, database, interactive_enabled, limit, offset, lane='test',can_change=False,session_control=False,batch_cards=False,clear_ready=False,batch_remove=False):
     tag,generation=identity()
     before=exact_database(database)
     with closing(sqlite3.connect(database.as_uri()+'?mode=ro',uri=True,isolation_level=None,timeout=1)) as db:
@@ -90,7 +90,7 @@ def snapshot(config, *, identity, database, interactive_enabled, limit, offset, 
                 annotate_maintenance(db,data,selected)
             if (can_change() if callable(can_change) else can_change):
                 from .queue_item_removal import annotate
-                annotate(db,data)
+                annotate(db,data,batch_remove=batch_remove)
                 if clear_ready:
                     from .database_clear import describe
                     clear=describe(db,stage=lane,binding=[before,(tag,generation)])
