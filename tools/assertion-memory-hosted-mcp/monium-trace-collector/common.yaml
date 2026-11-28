@@ -14,7 +14,7 @@ processors:
     error_mode: propagate
     trace_conditions:
       - 'scope.name != "assertion_memory.query_timing"'
-      - 'not IsMatch(span.name, "^(openai[.]chat|memory_query[.](submission|ready_probe|queue_wait|job_total|result_persist|query_total|release_lease|service_setup|snapshot|search|raw_search|answer|answer_payload|diagnostics|usage_accounting|provider_attempt|provider_setup|provider_cli|provider_network_wait|provider_response_read|provider_decode|provider_retry_signal|trace_request_write|trace_response_write|navigation|draft_generation|readiness_check|answer_verification|other_model|gap_search|answer_neighborhood|model_contract_validation|query_outcome|vm_http_submission|query_response_wait|ready_result_persist|answer_persist|answer_check_write|model_step_replay))$")'
+      - 'not IsMatch(span.name, "^(openai[.]chat|memory_query[.](submission|ready_probe|queue_wait|job_total|result_persist|query_total|release_lease|service_setup|snapshot|search|raw_search|answer|answer_payload|diagnostics|usage_accounting|provider_attempt|provider_setup|provider_cli|provider_network_wait|provider_response_read|provider_decode|provider_retry_signal|trace_request_write|trace_response_write|navigation|draft_generation|readiness_check|answer_verification|other_model|gap_search|answer_neighborhood|model_contract_validation|query_outcome|vm_http_submission|query_response_wait|ready_result_persist|answer_persist|answer_check_write|model_step_replay|sufficiency|relation_neighborhood|relation_frontier))$")'
       - 'Len(span.links) > 0'
       - 'spanevent.name == spanevent.name'
   transform/metadata_only:
