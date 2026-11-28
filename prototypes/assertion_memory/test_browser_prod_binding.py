@@ -4,6 +4,7 @@ from unittest import TestCase
 from unittest.mock import patch
 
 from . import browser_prod_binding as binding
+from . import base_browser_surface as surface
 
 class ProdBrowserBindingTest(TestCase):
     def test_canonical_lane_socket_and_writer_required_before_bind(self):
@@ -11,7 +12,7 @@ class ProdBrowserBindingTest(TestCase):
         with patch.object(binding.pwd,'getpwnam',return_value=SimpleNamespace(pw_uid=986)):
             with (patch.object(binding.os,'getuid',return_value=986),
                   patch.object(binding.os,'geteuid',return_value=986),
-                  patch.object(binding,'exact_database') as database,
+                  patch.object(surface,'exact_database') as database,
                   patch.object(binding,'_identity') as identity):
                 with self.assertRaises(ValueError):
                     binding.configured_prod_browser_lifespan(cfg,private_port=8893,interactive_enabled=False)
@@ -23,6 +24,7 @@ class ProdBrowserBindingTest(TestCase):
                 self.assertTrue(callable(binding.configured_prod_browser_lifespan(
                     cfg,private_port=8903,interactive_enabled=False)))
                 identity.assert_called_once_with(binding.PROD.root,'prod')
+                database.assert_called_once_with(binding.PROD.db)
 
             with patch.object(binding.os,'geteuid',return_value=0):
                 with self.assertRaises(ValueError):
@@ -44,7 +46,7 @@ class ProdBrowserBindingTest(TestCase):
         with (patch.object(binding.pwd,'getpwnam',return_value=SimpleNamespace(pw_uid=986)),
               patch.object(binding.os,'getuid',return_value=986),
               patch.object(binding.os,'geteuid',return_value=986),
-              patch.object(binding,'exact_database'),
+              patch.object(surface,'exact_database'),
               patch.object(binding,'_identity'),
               patch.object(binding,'_require_legacy_graph_stopped',side_effect=ValueError('still running')),
               patch('apps.graph_viewer.server.app.create_app') as graph):
@@ -62,7 +64,7 @@ class ProdBrowserBindingTest(TestCase):
             candidate=root/'sealed-release'
             candidate.mkdir()
             (root/'current').symlink_to(candidate)
-            fixture={binding._MAIN:b'main',binding._BINDING:b'binding'}
+            fixture={binding._MAIN:b'main',binding._BINDING:b'binding',binding._SURFACE:b'canonical-lane'}
             for name,raw in fixture.items():
                 dest=candidate/name
                 dest.parent.mkdir(parents=True,exist_ok=True)
@@ -86,6 +88,10 @@ class ProdBrowserBindingTest(TestCase):
                 with self.assertRaises(ValueError):
                     binding._capable_release(root)
                 manifest()
+                (candidate/binding._SURFACE).write_bytes(b'wrong-canonical-lane')
+                with self.assertRaises(ValueError):
+                    binding._capable_release(root)
+                (candidate/binding._SURFACE).write_bytes(fixture[binding._SURFACE])
                 (candidate/binding._MAIN).write_bytes(b'changed')
                 with self.assertRaises(ValueError):
                     binding._capable_release(root)
