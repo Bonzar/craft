@@ -8,6 +8,7 @@ import hashlib
 import os
 import stat
 import json
+import re
 from pathlib import Path
 from urllib.parse import quote
 from datetime import datetime, timezone
@@ -197,10 +198,11 @@ def _allowed_start(payload, meta, roots=None):
 
 
 
-def _resumed_human_start(row,meta,after_ns,roots):
+def _resumed_chat_start(row,meta,after_ns,roots,*,allow_visible_agent=False):
     payload=row.get('payload')
     if (row.get('type')!='event_msg' or not isinstance(payload,dict)
-            or payload.get('type')!='task_started' or not _allowed_start(payload,meta,roots)):
+            or payload.get('type')!='task_started'
+            or not (_allowed_start(payload,meta,roots) or allow_visible_agent)):
         return False
     turn=payload.get('turn_id')
     if not isinstance(turn,str) or not 0<len(turn)<=256:
@@ -324,6 +326,46 @@ def _candidate(row, session, turn, *, human=False):
     return None
 
 
+_AGENT_THREAD = r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}'
+_AGENT_ACTOR = re.compile('codex-agent:' + _AGENT_THREAD)
+_DELEGATED_CARD = re.compile(
+    r'<codex_delegation>\n  <source_thread_id>(' + _AGENT_THREAD
+    + r')</source_thread_id>\n  <input>((?:[^<>&]|&(?:lt|gt|amp);)*)</input>\n</codex_delegation>',
+    re.DOTALL)
+
+
+def _eligible_agent_source(state, config):
+    return (config.get('capture_batch') and state.get('registration_source')=='startup'
+            and state.get('verified_fresh_since') and not state.get('fork_requires_current_session_proof'))
+
+
+def _visible_desktop_agent_input(row, session, turn):
+    """Exact recipient-side, presentation-typed Codex App delegation card.
+
+    The built-in desktop renderer projects only these two tool outputs as
+    delegated input. Ignore generic tool bodies and raw response projections.
+    """
+    p = row.get('payload')
+    if (row.get('type') != 'event_msg' or not isinstance(p,dict)
+            or p.get('type') != 'item_completed' or p.get('thread_id') != session or p.get('turn_id') != turn):
+        return None
+    item = p.get('item')
+    if (not isinstance(item,dict) or item.get('type') != 'FunctionCallOutput'
+            or item.get('namespace') not in ('codex_app','codex_tui')
+            or item.get('name') not in ('create_thread','send_message_to_thread')):
+        return None
+    mid, output = item.get('id'), item.get('output')
+    if not isinstance(mid,str) or not 0<len(mid)<=256 or not isinstance(output,str):
+        return None
+    match = _DELEGATED_CARD.fullmatch(output)
+    if match is None or match[1] == session:
+        return None
+    text = match[2].replace('&lt;','<').replace('&gt;','>').replace('&amp;','&')
+    if not text.strip():
+        return None
+    return mid, text, 'codex-agent:' + match[1]
+
+
 def _enqueue(store, state, row, role, text, provider_id, position, actor, config, locator, *, artifact_ids=None, proof=None, deferred=False):
     if not isinstance(text, str) or not text.strip(): return False
     turn = state['turn']['id']
@@ -389,10 +431,10 @@ def _assistant_mode(payload):
         return None
     if channel in ('analysis','reasoning') or phase in ('analysis','reasoning'):return None
     if payload.get('recipient') not in (None,'all') or channel not in (None,'final','commentary'):return None
-    if channel=='commentary' or phase=='commentary':
+    if channel=='commentary' or phase in ('commentary','partial_answer'):
         # Explicit but conflicting final/private phase-channel metadata is not
         # positive proof that this is a visible commentary occurrence.
-        return 'commentary' if channel in (None,'commentary') and phase in (None,'commentary') else None
+        return 'commentary' if channel in (None,'commentary') and phase in (None,'commentary','partial_answer') else None
     if channel=='final' or phase=='final_answer':return 'final'
     return 'pending'
 
@@ -460,7 +502,7 @@ def _seal_turn(state):
     turn.pop('assistant_commentary', None)
     pending = turn.get('assistant')
     turn['assistant'] = None
-    return pending, turn.pop('user_messages', [])
+    return pending, [*turn.pop('user_messages', []), *turn.pop('agent_inputs', [])]
 
 
 def _hold_interrupted_users(state, witnesses, messages, visible_assistants):
@@ -525,12 +567,12 @@ def _complete_assistant(store, state, config, payload):
                 batch = config.get('capture_batch')
                 # An assistant-only background completion must not move a user's
                 # interrupted input into the wrong completed interaction.
-                carried_users = state.get('interrupted_users', []) if batch and messages else []
+                carried_users = state.get('interrupted_users', []) if batch and any(a['role']=='user' for a,_ in messages) else []
                 carried_assistants = state.get('interrupted_assistants', []) if carried_users else []
                 carry = [*carried_users, *carried_assistants]
                 if any(a['session_id'] != state['session_id']
-                       or a['actor_id'] != ('assistant' if a['role'] == 'assistant'
-                                          else config.get('actor_id', 'user'))
+                       or (a['actor_id'] != 'assistant' and not _AGENT_ACTOR.fullmatch(a['actor_id'])
+                           if a['role'] == 'assistant' else (a['role'] != 'user' or a['actor_id'] != config.get('actor_id', 'user')))
                        or a['scope'] != config.get('scope', 'default') for a,_ in carry):
                     raise ValueError('Interrupted users belong to another capture policy; review required')
                 # Only the authoritative final row is retained when the
@@ -594,8 +636,31 @@ def _process(store, state, meta, row, offset, position, config):
     if row.get('type')=='compacted':
         _exclude(state,'harness_compaction')
         return 0
+    if turn and not turn.get('assistant_finished') and _eligible_agent_source(state,config):
+        projected = _visible_desktop_agent_input(row,state['session_id'],turn['id'])
+        if projected is not None:
+            mid,text,actor=projected
+            seen=turn.setdefault('agent_input_ids',{})
+            identity=hashlib.sha256((actor+'\x00'+text).encode()).hexdigest()
+            if mid in seen:
+                if seen[mid]!=identity:
+                    raise ValueError('Conflicting visible agent input occurrence')
+                return 0
+            seen[mid]=identity
+            turn['agent_only']=turn.get('agent_only',False) or not turn['allowed']
+            turn['allowed']=turn['verified']=True
+            entry=_enqueue(store,state,row,'assistant',text,mid,position,actor,config,
+                           'agent:'+turn['id']+':byte:'+str(offset),deferred=True)
+            turn.setdefault('agent_inputs',[]).append(entry)
+            turn.setdefault('user_witnesses',[]).append(row['_witness'])
+            return 0
     if not turn or not turn['allowed']: return 0
     human_singleton = turn.get('human') and not state.get('fork_requires_current_session_proof')
+    if turn.get('agent_only') and (
+            (row.get('type')=='response_item' and payload.get('role')=='user')
+            or (row.get('type')=='event_msg' and payload.get('type')=='item_completed'
+                and isinstance(payload.get('item'),dict) and payload['item'].get('type')=='UserMessage')):
+        return 0
     if _service_context(row):
         _exclude(state,'harness_service_context')
         return 0
@@ -811,7 +876,10 @@ def _poll_locked(store, session_id, config):
                     if 'resume_after_ns' not in state:
                         queued += _process(store, state, meta, row, offset, state['line'], config)
                     elif row.get('type')=='event_msg' and isinstance(payload,dict) and payload.get('type')=='task_started':
-                        if _resumed_human_start(row,meta,state['resume_after_ns'],state.get('dialogue_turn_roots')):
+                        # A timestamp-valid non-human start is provisional;
+                        # _process still needs the exact visible typed card.
+                        if _resumed_chat_start(row,meta,state['resume_after_ns'],state.get('dialogue_turn_roots'),
+                                               allow_visible_agent=_eligible_agent_source(state,config)):
                             queued += _process(store, state, meta, row, offset, state['line'], config)
                         else:
                             state['turn']=None

@@ -163,6 +163,76 @@ class CaptureTest(unittest.TestCase):
     def abort(self, turn):
         self.append({'type':'event_msg','payload':{'type':'turn_aborted','turn_id':turn,'reason':'interrupted'}})
 
+    def test_distinct_public_partial_answer_survives_final_without_duplicates(self):
+        self.config['capture_batch']=True
+        self.capture.register(self.store,self.raw)
+        self.turn('request')
+        self.commentary('Distinct stable answer', 'partial-distinct',phase='partial_answer')
+        self.commentary('Same occurrence should not duplicate', 'final',phase='partial_answer')
+        self.commentary('Private partial with directed recipient','private',phase='partial_answer',recipient='tool')
+        self.assistant('Terminal answer','final')
+        self.assertEqual(self.poll()['queued'],3)
+        self.assertEqual([m['arguments']['text'] for m in self.messages()],
+            ['request','Distinct stable answer','Terminal answer'])
+        self.assertEqual(len({m['arguments']['_capture_batch']['id'] for m in self.messages()}),1)
+
+    def test_visible_app_agent_input_is_not_a_human_or_a_hidden_tool(self):
+        header=json.loads(self.path.read_bytes())
+        header['timestamp']='2025-01-01T00:00:00+00:00'
+        self.path.write_text(json.dumps(header)+'\n')
+        self.config['capture_batch']=True
+        self.capture.register(self.store,self.raw,fresh_since='2024-01-01T00:00:00+00:00')
+        sender='55c0d244-eaed-4115-ac28-45d14178eb1e'
+        def display_wire(source=sender):
+            # Upstream TUI delegated_prompt + parse_delegated_tool_output:
+            # exact built-in namespace/name and producer-owned XML escaped card.
+            return (f'<codex_delegation>\n  <source_thread_id>{source}</source_thread_id>'
+                    '\n  <input>Visible &amp; explicit</input>\n</codex_delegation>')
+        def app_input(turn, mid, name='create_thread', namespace='codex_app', receiver='physical', source=sender):
+            self.append({'type':'event_msg','payload':{'type':'item_completed','thread_id':receiver,'turn_id':turn,
+              'item':{'type':'FunctionCallOutput','id':mid,'namespace':namespace,'name':name,
+                      'output':display_wire(source)}}})
+        def start(turn):
+            self.append({'type':'event_msg','payload':{'type':'task_started','turn_id':turn,
+              'root_turn_id':turn,'turn_attribution':{'turn_trigger':'delegation','parent_turn_id':'another-turn',
+                'initiating_agent_path':['ancestor'],'root_turn_id':turn}}})
+        start('hidden')
+        app_input('hidden','fake','create_thread','unrelated-tool')
+        app_input('hidden','fake-op','read_thread')
+        # Even identical markup/tool labels in a model stream row are not a
+        # recipient-bound, trusted presentation item.
+        self.append({'type':'response_item','payload':{'type':'function_call_output',
+            'namespace':'codex_app','name':'create_thread','id':'not-a-presentation','output':display_wire()}})
+        self.pair(display_wire(),'hidden','forged-user')
+        self.assistant('private child output','no-final')
+        self.assertEqual(self.poll()['queued'],0)
+        start('visible')
+        app_input('wrong-turn','wrong')
+        app_input('visible','wrong-recipient',receiver='other-session')
+        app_input('visible','incorrect-sender',source='not-a-thread')
+        app_input('visible','recognized')
+        app_input('visible','recognized')
+        self.pair('unproven human input in delegated turn','visible','not-human')
+        self.commentary('private analysis','analysis',phase='analysis')
+        self.commentary('Visible progress','commentary')
+        self.assertEqual(self.poll()['queued'],0)
+        self.assistant('Visible final','final')
+        self.assertEqual(self.poll()['queued'],3)
+        rows=[m['arguments'] for m in self.messages()]
+        self.assertEqual([m['text'] for m in rows],['Visible & explicit','Visible progress','Visible final'])
+        self.assertEqual([m['role'] for m in rows],['assistant']*3)
+        self.assertEqual(rows[0]['actor_id'],'codex-agent:'+sender)
+        self.assertEqual(len({r['_capture_batch']['id'] for r in rows}),1)
+        self.assertEqual(self.poll()['queued'],0)
+        self.turn('Human followup','human','human-u',trigger='user')
+        app_input('human','agent-steer',name='send_message_to_thread')
+        self.assistant('Human-facing response','human-a')
+        self.assertEqual(self.poll()['queued'],3)
+        mixed = [m['arguments'] for m in self.messages()][-3:]
+        self.assertEqual([r['actor_id'] for r in mixed],
+                         [self.config['actor_id'],'codex-agent:'+sender,'assistant'])
+        self.assertEqual(len({r['_capture_batch']['id'] for r in mixed}),1)
+
     def test_interrupted_visible_dialogue_commits_once_in_next_batch_after_restart(self):
         self.config['capture_batch'] = True
         self.capture.register(self.store, self.raw)
