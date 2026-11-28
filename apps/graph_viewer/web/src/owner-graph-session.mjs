@@ -1,6 +1,8 @@
 import {ownerGraphReconciler,readOwnerGraphWire} from './owner-graph-wire.mjs';
 
 const FIRST_HELLO_MS=8000;
+const INITIAL_STATE_IDLE_MS=15000;
+const DATA_PROGRESS=new Set(['snapshot-start','snapshot-chunk','snapshot-end','delta']);
 
 // One active data connection per graph view. The cached frame may paint as
 // the request starts, but fresh frames are applied strictly after that paint.
@@ -35,7 +37,7 @@ export function openOwnerGraphSession({
     if(closed)return;
     const ac=new AbortController();attempt=ac;const {signal}=ac;
     onState(accepted||warm?'snapshot-connecting':'connecting');
-    let rejectedApply=false,rejectedDelta=false,live=false,hello=false,expired=false;
+    let rejectedApply=false,rejectedDelta=false,live=false,hello=false,expired=null;
     let phase='request';
     const started=now();
     const timing={attempt:++attemptNumber,headers_ms:null,first_frame_ms:null,hello_ms:null,finished_ms:null,outcome:null};
@@ -45,8 +47,15 @@ export function openOwnerGraphSession({
     publish();
     const report=(next,failure=false)=>{phase=next;onDiagnostic(next,failure);};
     report('request');
-    const firstFrame=startDeadline(()=>{if(current(signal)&&!hello){expired=true;ac.abort();}},FIRST_HELLO_MS);
-    const stopDeadline=()=>clearDeadline(firstFrame);
+    let deadline=null;
+    const stopDeadline=()=>{if(deadline!==null){clearDeadline(deadline);deadline=null;}};
+    const armDeadline=(outcome,ms)=>{
+      stopDeadline();
+      deadline=startDeadline(()=>{
+        if(current(signal)&&!live){expired=outcome;ac.abort();}
+      },ms);
+    };
+    armDeadline('hello-timeout',FIRST_HELLO_MS);
     signal.addEventListener('abort',stopDeadline,{once:true});
     const apply=async(action,value)=>{
       if(!current(signal))throw new DOMException('Closed','AbortError');
@@ -74,6 +83,7 @@ export function openOwnerGraphSession({
       onReset:async value=>{
         if(current(signal)){
           accepted=null;resumeRejected=false;live=false;
+          if(deadline===null)armDeadline('initial-state-timeout',INITIAL_STATE_IDLE_MS);
           await apply(onReset,value);
           await cache?.clear();
           if(current(signal))onState('connecting');
@@ -84,7 +94,7 @@ export function openOwnerGraphSession({
           if(accepted.epoch!==value.epoch||accepted.revision!==value.revision)
             throw new Error('Accepted graph does not match caught-up stream');
           if(accepted.cursor!==value.cursor)await saved({...accepted,cursor:value.cursor},signal);
-          if(current(signal)){live=true;failures=0;report('caught-up');onState('live');}
+          if(current(signal)){live=true;stopDeadline();failures=0;report('caught-up');onState('live');}
         }
       },
       onHeartbeat:()=>{if(current(signal)&&live&&accepted&&reader.checkpoint())onState('live');},
@@ -98,12 +108,16 @@ export function openOwnerGraphSession({
         // network timer before waiting for a slow local warm paint.
         if(current(signal)&&name==='hello'&&value?.protocol==='graph-v1'&&
             typeof value.epoch==='string'&&/^[a-f0-9]{64}$/.test(value.epoch)){
-          hello=true;stopDeadline();stamp('hello_ms');report('hello');
+          hello=true;armDeadline('initial-state-timeout',INITIAL_STATE_IDLE_MS);stamp('hello_ms');report('hello');
         }
         await warmView;
         if(current(signal)){
           await reader.accept(name,value);
           if(name==='snapshot-start')report('baseline-start');
+          // Only validated graph progress keeps an unfinished startup alive.
+          // Heartbeats show transport activity, not an installed graph.
+          if(current(signal)&&!live&&DATA_PROGRESS.has(name))
+            armDeadline('initial-state-timeout',INITIAL_STATE_IDLE_MS);
         }
       }});
       await warmView;
@@ -126,7 +140,7 @@ export function openOwnerGraphSession({
       if(attempt===ac)attempt=null;
     }
     if(closed)return;
-    if(expired)report('hello-timeout',true);
+    if(expired)report(expired,true);
     else if(phase==='request'||phase==='headers')report('hello-missing',true);
     finishTiming(phase==='caught-up'?'stream-ended':phase);
     onState(accepted?'snapshot-offline':'offline');

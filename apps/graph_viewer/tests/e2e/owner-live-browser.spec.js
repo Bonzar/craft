@@ -374,3 +374,68 @@ test('TEST owner can use visible node preview without any mutation authority',as
   expect(effects).toEqual([]);
   expect(createHash('sha256').update(readFileSync(join(base,'preview.sqlite3'))).digest('hex')).toBe(expectedSHA);
 });
+
+test('hello without graph data retries once and reaches real Live without a graph GET',async({nativeBrowser:{context,page}})=>{
+  test.setTimeout(45_000);
+  const base=realpathSync(process.env.GRAPH_BROWSER_FIXTURE);
+  const origin='https://127.0.0.1:'+Number(readFileSync(join(base,'fixture-port'),'utf8'));
+  const packed=process.env.GRAPH_BROWSER_VARIANT==='packed';
+  await context.route('**/*',route=>{
+    const u=new URL(route.request().url());
+    return u.origin===origin||['about:','blob:','data:'].includes(u.protocol)?route.continue():route.abort();
+  });
+  await page.addInitScript(()=>{
+    const fetchOriginal=window.fetch;
+    let sessions=0;
+    window.fetch=async function(input,options){
+      const url=new URL(input instanceof Request?input.url:input,location.href);
+      const response=await fetchOriginal.call(this,input,options);
+      if(url.origin!==location.origin||url.pathname!=='/api/v1/events'||url.searchParams.get('wire')!=='graph-v1'||++sessions!==1)
+        return response;
+      if(!response.ok||!response.body)return response;
+      const reader=response.body.getReader();
+      const decoder=new TextDecoder(),encoder=new TextEncoder();
+      return new Response(new ReadableStream({
+        async start(controller){
+          let buffered='';
+          try{
+            for(;;){
+              const {done,value}=await reader.read();
+              if(done)throw new Error('No real hello received from fixture');
+              buffered+=decoder.decode(value,{stream:true});
+              const boundary=/\r?\n\r?\n/.exec(buffered);
+              if(boundary){
+                const hello=buffered.slice(0,boundary.index+boundary[0].length);
+                if(!hello.startsWith('event: hello\n'))throw new Error('Fixture did not open with hello');
+                controller.enqueue(encoder.encode(hello));
+                options.signal.addEventListener('abort',()=>controller.error(options.signal.reason),{once:true});
+                break;
+              }
+            }
+          }finally{void reader.cancel().catch(()=>{});}
+        }
+      }),{status:response.status,headers:response.headers});
+    };
+  });
+  const events=[],graph=[];
+  page.on('request',req=>{
+    const url=new URL(req.url());
+    if(url.origin!==origin)return;
+    if(url.pathname==='/api/v1/events'&&url.searchParams.get('wire')==='graph-v1')events.push(url.pathname);
+    if(url.pathname==='/api/v1/graph'||url.pathname.startsWith('/api/v1/graph/'))graph.push(url.pathname);
+  });
+  await page.goto(origin+(packed?'/visual/':''));
+  await page.locator('#password').fill('synthetic-only-owner');
+  await page.locator('#login-button').click();
+  const attempt=await page.waitForFunction(()=>{
+    const previous=JSON.parse(document.documentElement.dataset.ownerGraphLastAttempt??'null');
+    return previous?.attempt===1&&previous.outcome==='initial-state-timeout'?previous:null;
+  },null,{timeout:25_000});
+  const timings=await attempt.jsonValue();
+  expect(timings.headers_ms).not.toBeNull();
+  expect(timings.hello_ms).not.toBeNull();
+  await expect(page.locator('#connection-status')).toHaveText('Live · обновляется',{timeout:10_000});
+  await page.waitForFunction(()=>window.__graphViewer?.snapshot().renderedFrames>1&&Boolean(window.__graphViewer.lodAuditData()));
+  expect(events).toHaveLength(2);
+  expect(graph).toEqual([]);
+});
