@@ -374,3 +374,31 @@ test('TEST owner can use visible node preview without any mutation authority',as
   expect(effects).toEqual([]);
   expect(createHash('sha256').update(readFileSync(join(base,'preview.sqlite3'))).digest('hex')).toBe(expectedSHA);
 });
+
+test('packed owner cancels or confirms the deletion of a complete pending batch',async({nativeBrowser:{context,page}})=>{
+  test.skip(process.env.GRAPH_BROWSER_VARIANT!=='packed','queue overlay is part of the packed release');
+  const base=realpathSync(process.env.GRAPH_BROWSER_FIXTURE);
+  const origin='https://127.0.0.1:'+Number(readFileSync(join(base,'batch-port'),'utf8'));
+  await context.route('**/*',route=>{
+    const url=new URL(route.request().url());
+    return url.origin===origin||['about:','blob:','data:'].includes(url.protocol)?route.continue():route.abort();
+  });
+  await page.goto(origin+'/visual/');
+  await page.locator('#password').fill('synthetic-only-owner');
+  await page.locator('#login-button').click();
+  await page.locator('#visual-queue-open').click();
+  const queue=page.locator('#visual-queue');
+  const card=queue.getByRole('heading',{name:'Пакет реплик · 2',exact:true});
+  const remove=queue.getByRole('button',{name:'Удалить пакет из очереди',exact:true});
+  const confirm=queue.getByRole('button',{name:'Подтвердить удаление',exact:true});
+  await expect(card).toBeVisible();
+  await remove.click();
+  await queue.getByRole('button',{name:'Отмена',exact:true}).click();
+  await expect(card).toBeVisible();
+  await remove.click();
+  await confirm.click();
+  await expect(card).toHaveCount(0);
+  expect(JSON.parse(readFileSync(join(base,'batch-deletion.json'),'utf8'))).toEqual({
+    counts:{memory_raw_events:0,memory_capture_jobs:0},replay_denied:true,
+  });
+});
