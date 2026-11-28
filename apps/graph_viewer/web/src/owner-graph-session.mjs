@@ -83,6 +83,7 @@ export function openOwnerGraphSession({
       onReset:async value=>{
         if(current(signal)){
           accepted=null;resumeRejected=false;live=false;
+          if(deadline===null)armDeadline('initial-state-timeout',INITIAL_STATE_IDLE_MS);
           await apply(onReset,value);
           await cache?.clear();
           if(current(signal))onState('connecting');

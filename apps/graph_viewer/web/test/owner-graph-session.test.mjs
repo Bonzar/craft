@@ -232,3 +232,32 @@ test('valid progress extends first usable state timer but heartbeat alone does n
     assert.equal(deadline,null);
   }finally{c.close();}
 });
+
+test('a reset on an already live stream bounds the replacement baseline too',async()=>{
+  let read,silence;const states=[],timings=[];
+  const c=openOwnerGraphSession({selector:{mode:'current'},scope:'scope',verifiedEpoch:e,
+    cache:{take:async()=>warm,save:async()=>{},clear:async()=>{}},onCached:async x=>x,onReset:async()=>{},
+    onState:x=>states.push(x),onAttempt:x=>timings.push(x),schedule:()=>1,cancel(){},
+    startDeadline:fn=>{silence={fn};return silence;},clearDeadline:h=>{if(silence===h)silence=null;},
+    read:async x=>{
+      read=x;
+      await new Promise((_,reject)=>x.signal.addEventListener('abort',()=>reject(Error('aborted')),{once:true}));
+    }});
+  try{
+    await c.initial;
+    await read.onEvent('hello',{epoch:e,protocol:'graph-v1'});
+    await read.onEvent('caught-up',{epoch:e,revision:r,cursor:'5'});
+    assert.equal(states.at(-1),'live');
+    assert.equal(silence,null);
+    await read.onEvent('reset',{epoch:e,reason:'checkpoint_expired'});
+    assert.equal(states.at(-1),'connecting');
+    const afterReset=silence;
+    assert.ok(afterReset,'reset needs a replacement baseline');
+    await read.onEvent('heartbeat',{});
+    assert.equal(silence,afterReset);
+    afterReset.fn();await settle();
+    assert.equal(read.signal.aborted,true);
+    assert.equal(timings.at(-1).outcome,'initial-state-timeout');
+    assert.equal(states.at(-1),'offline');
+  }finally{c.close();}
+});
