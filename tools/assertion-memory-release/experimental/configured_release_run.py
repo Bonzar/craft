@@ -1,4 +1,5 @@
 """Protected Actions composition; the provider commands do not validate GitHub."""
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 import hashlib
 import json
@@ -84,6 +85,15 @@ def parameters(env,event,get,profiles,stage):
     return profile,control,artifact
 
 
+@contextmanager
+def deploy_phase(name):
+    try:
+        yield
+    except (KeyError, OSError, ValueError, ImportError):
+        print(f"Configured release phase failed: {name}", file=sys.stderr)
+        raise
+
+
 def run(env=os.environ, argv=None):
     argv=list(sys.argv[1:] if argv is None else argv)
     temp=Path(env['RUNNER_TEMP'])/'configured-release'
@@ -117,17 +127,22 @@ def run(env=os.environ, argv=None):
     # Transport helpers are intentionally absent for a profile until its own
     # strict on-host receiver/authenticator is independently provisionable.
     common.expect(operation.activate is not None, 'Configured receiver is not registered')
-    payload.mkdir(mode=0o700)
-    content=common.unpack_verified(path,payload,release,operation.unpack,payload_name=operation.payload_name)
-    if stage=='prod':
-        promotion=common.candidate_promotion(ctrl,release,content,env['RELEASE_TEST_PROOF'],get,temp)
-    else:
-        promotion=None
-    receipt=operation.activate(ctrl,release,content,payload,promotion,env)
-    operation.smoke(ctrl,release,content,payload,env)
-    if stage=='test':
-        proof=common.seal_test(ctrl,release,content,receipt)
-        (temp/common.TEST_RECEIPT).write_text(json.dumps(proof, separators=(',',':'),sort_keys=True),encoding='ascii')
+    with deploy_phase('unpack'):
+        payload.mkdir(mode=0o700)
+        content=common.unpack_verified(path,payload,release,operation.unpack,payload_name=operation.payload_name)
+    with deploy_phase('prepare-promotion'):
+        if stage=='prod':
+            promotion=common.candidate_promotion(ctrl,release,content,env['RELEASE_TEST_PROOF'],get,temp)
+        else:
+            promotion=None
+    with deploy_phase('activate-and-validate-receiver-receipt'):
+        receipt=operation.activate(ctrl,release,content,payload,promotion,env)
+    with deploy_phase('smoke'):
+        operation.smoke(ctrl,release,content,payload,env)
+    with deploy_phase('seal-test-proof'):
+        if stage=='test':
+            proof=common.seal_test(ctrl,release,content,receipt)
+            (temp/common.TEST_RECEIPT).write_text(json.dumps(proof, separators=(',',':'),sort_keys=True),encoding='ascii')
 
 
 if __name__ == '__main__':
