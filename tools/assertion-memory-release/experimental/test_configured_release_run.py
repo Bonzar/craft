@@ -1,9 +1,11 @@
 """Exercise the actual runner/composer boundary before Actions is dispatched."""
+from contextlib import redirect_stderr
+from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import TestCase, main
 from unittest.mock import patch
-from configured_release_run import build, load_registry
+from configured_release_run import build, deploy_phase, load_registry
 import configured_provider_checks as common
 
 
@@ -29,6 +31,23 @@ class BuildComposition(TestCase):
                                  (profiles[name].test.environment,profiles[name].prod.environment))
                 self.assertEqual((got['test_concurrency'],got['prod_concurrency']),operations[name].concurrency)
         self.assertEqual(len(seen),2)
+
+
+class DeployDiagnostics(TestCase):
+    def test_phase_logs_only_fixed_label_and_preserves_failure(self):
+        stream = StringIO()
+        failure = ValueError('synthetic private receiver reply')
+        with redirect_stderr(stream), self.assertRaises(ValueError) as caught:
+            with deploy_phase('smoke'):
+                raise failure
+        self.assertIs(caught.exception, failure)
+        self.assertEqual(stream.getvalue(), 'Configured release phase failed: smoke\n')
+
+    def test_success_is_silent(self):
+        stream = StringIO()
+        with redirect_stderr(stream), deploy_phase('unpack'):
+            pass
+        self.assertEqual(stream.getvalue(), '')
 
 
 if __name__=='__main__':
