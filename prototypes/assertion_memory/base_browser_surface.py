@@ -75,6 +75,9 @@ def base_browser_app(stage, *, config, private_port, verified_identity, release_
         browser=base_owner_browser(stage=stage,config=config,verified_identity=verified_identity,
             release_lease=release_lease,interactive_enabled=interactive,private_owner_queue=private_owner_queue,
             **({} if machine_devices is None else {'machine_devices':machine_devices}))
+    if test_dashboard is not None:
+        from apps.graph_viewer.server.graph_node_owner_api import bind_native_test_writer
+        bind_native_test_writer(browser,test_dashboard)
     graph=base_graph_component(stage,state,browser=browser,dashboard=test_dashboard,existing_owner_only=True,
                      native_test_dashboard=test_dashboard,
                      owner_snapshot_events=enabled(dashboard=test_dashboard,browser=browser))
