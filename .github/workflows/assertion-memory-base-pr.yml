@@ -94,6 +94,8 @@ jobs:
           python -m unittest prototypes.assertion_memory.release_catalog_test prototypes.assertion_memory.dual_http_test
           node --test tools/assertion-memory-hosted-mcp/sites-dynamic/test_worker.mjs tools/assertion-memory-hosted-mcp/sites-dynamic/test_base_contract.mjs
           python -m unittest discover -s tools/assertion-memory-hosted-mcp/sites-dynamic -p test_release_package.py
+      - name: Verify browser reads and writes the same canonical Base lane
+        run: python3 -B -m unittest prototypes.assertion_memory.tests.test_base_browser_surface
       - name: Verify owner Graph queue status and live replay
         run: |
           python -m unittest discover -s apps/graph_viewer/tests/backend -p 'test_queue_dashboard.py'

@@ -1,4 +1,5 @@
 """Source-only composition specimen; never loads settings or starts a server."""
+from pathlib import Path
 from apps.graph_viewer.server.browser_owner_api import BrowserOwnerAPI
 from prototypes.assertion_memory.queue_owner_domain import owner_operations
 from prototypes.assertion_memory.queue_rest import snapshot
@@ -8,7 +9,7 @@ _ACTIONS = frozenset((
     'policy_prepare', 'policy_set', 'item_preview', 'item_remove',
 ))
 
-def base_owner_browser(*, stage, config, verified_identity, release_lease, interactive_enabled, machine_devices=None):
+def base_owner_browser(*, stage, config, verified_identity, release_lease, interactive_enabled, machine_devices=None, private_owner_queue=None):
     """Compose browser transport with already bootstrapped Base writer authority.
 
     Only Base startup can supply the pinned identity and actual writer lease.
@@ -18,23 +19,40 @@ def base_owner_browser(*, stage, config, verified_identity, release_lease, inter
         raise ValueError('explicit Base browser lane required')
     if not callable(verified_identity) or not callable(release_lease):
         raise ValueError('protected Base writer authority required')
+    # Only a handler already bound by Base startup can carry this grant;
+    # never accept browser-supplied flags, credentials, or a second DB.
+    database=Path(config.db)
+    clear_ready=getattr(private_owner_queue,'queue_pause_ready',None)
+    clear_granted=(stage=='prod' and callable(clear_ready)
+        and callable(getattr(private_owner_queue,'queue_clear_route',None))
+        and getattr(private_owner_queue,'queue_clear_database',None)==database)
     # Capture actual identity per request, not while the receiver may hold its
     # exclusive deployment lease while starting the process.
     def perform(action, args):
-        if action not in _ACTIONS:
+        clear_action=action in ('clear_prepare','clear_commit')
+        if action not in _ACTIONS and not (clear_action and clear_granted):
             raise ValueError('unsupported Base browser owner action')
-        operations=owner_operations(database=config.db,release_lease=release_lease,
+        operations=owner_operations(database=database,release_lease=release_lease,
             identity=verified_identity,stage=stage,fresh_only=config.auto_process_fresh_mac,
             baseline=config.processing_session_ids)
+        if clear_action:
+            from .processing_control import Conflict
+            def require_current(_db=None):
+                if not clear_ready():
+                    raise Conflict('Current Base clear authority not ready')
+            require_current()
+            if action=='clear_commit':
+                return operations(action,args,authorize=require_current)
         return operations(action,args)
 
     def project(*, limit, offset):
         with release_lease():
-            return snapshot(config,identity=verified_identity,database=config.db,
+            return snapshot(config,identity=verified_identity,database=database,
                 interactive_enabled=interactive_enabled,limit=limit,offset=offset,lane=stage,
                 can_change=True,session_control=True,batch_cards=True,clear_ready=False)
 
-    browser=BrowserOwnerAPI(stage=stage,perform=perform,queue_snapshot=project,clear_enabled=False,dashboard_live=False)
+    browser=BrowserOwnerAPI(stage=stage,perform=perform,queue_snapshot=project,clear_enabled=clear_granted,dashboard_live=False,
+                            single_clear=clear_granted)
     if machine_devices is not None:
         browser.attach_machine_devices(machine_devices,release_lease,verified_identity)
     return browser

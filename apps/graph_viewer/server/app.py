@@ -400,7 +400,7 @@ def validate_static_directory(static_dir, *private_paths):
     return root
 
 
-def create_app(source_path, state_dir, *, password=None, provider_id='assertion-memory', static_dir=None, source=None, semantic_model=None, synthetic_fixture=False, public_origin=None, bridge_read_token_file=None, allowed_proxy_hosts=(), queue_dashboard=None, queue_control=False, database_clear_lane=None, database_clear_read_token_file=None, test_direct_events_origin=None, browser_owner_api=None, existing_owner_only=False, owner_snapshot_events=False):
+def create_app(source_path, state_dir, *, password=None, provider_id='assertion-memory', static_dir=None, source=None, semantic_model=None, synthetic_fixture=False, public_origin=None, bridge_read_token_file=None, allowed_proxy_hosts=(), queue_dashboard=None, queue_control=False, database_clear_lane=None, database_clear_read_token_file=None, test_direct_events_origin=None, browser_owner_api=None, existing_owner_only=False, owner_snapshot_events=False, native_test_dashboard=None):
     if type(owner_snapshot_events) is not bool:
         raise ValueError('Expected explicit owner snapshot event flag')
     # The legacy Sites env binding is deliberately read-only. Mutation must be
@@ -410,6 +410,19 @@ def create_app(source_path, state_dir, *, password=None, provider_id='assertion-
     if type(existing_owner_only) is not bool or existing_owner_only and (
             password is not None or browser_owner_api is None or queue_dashboard is not None):
         raise ValueError('Existing-only owner store requires the verified browser pipeline')
+    if native_test_dashboard is not None:
+        from .browser_owner_api import BrowserOwnerAPI
+        from .queue_dashboard import HostedQueueDashboard,SCOPES
+        from prototypes.assertion_memory.dashboard_projection import projection_path
+        if (not existing_owner_only or queue_control
+                or type(browser_owner_api) is not BrowserOwnerAPI or browser_owner_api.stage!='test'
+                or type(native_test_dashboard) is not HostedQueueDashboard
+                or native_test_dashboard.stage!='test' or native_test_dashboard.db!=SCOPES['test'][1]
+                or Path(source_path)!=native_test_dashboard.db
+                or native_test_dashboard.config!=projection_path('test')
+                or not callable(native_test_dashboard.activation)):
+            raise ValueError('Native browser dashboard must be the exact TEST Base reader')
+        queue_dashboard=native_test_dashboard
     if queue_dashboard is None and not existing_owner_only:
         from .queue_dashboard import configured_for_legacy_reader
         queue_dashboard = configured_for_legacy_reader(source_path)

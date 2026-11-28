@@ -235,7 +235,7 @@ def create_http_app(config: ServiceConfig, token: str, public_host: str, *, port
                 # Browser depends on the writer; enter after dependencies
                 # become ready and leave before they begin unwinding.
                 if browser_lifespan is not None:
-                    await stack.enter_async_context(browser_lifespan(interactive_active=interactive))
+                    await stack.enter_async_context(browser_lifespan(interactive_active=interactive, private_owner_queue=queue_pause))
                 yield
         finally:
             store.close()
