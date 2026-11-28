@@ -347,12 +347,14 @@ def installed_test_clear_profile():
         logging.getLogger(__name__).warning('test_browser_clear_profile_invalid')
         return None
 
-def configured_browser_api(dashboard, *, clear_profile=None, prod_owner_bridge=None, clear_enabled=False, graph_node_bridge=None, ordinary_test_clear=False):
+def configured_browser_api(dashboard, *, clear_profile=None, prod_owner_bridge=None, clear_enabled=False, graph_node_bridge=None, ordinary_test_clear=False, native_test_batch_removal=False):
     """Bind ordinary owner controls to the configured TEST or private PROD lane."""
     # Retain the old keyword only to fail closed with a meaningful error.
     # A caller flag alone cannot supply TEST epoch or release authorization.
     if clear_enabled is not False:
         raise ValueError('An explicit verified TEST clear profile is required')
+    if type(native_test_batch_removal) is not bool or (native_test_batch_removal and dashboard.stage!='test'):
+        raise ValueError('Native batch removal requires the configured TEST owner lane')
     from .prod_owner_bridge import GraphNodeOwnerBridge
     if graph_node_bridge is not None and (type(graph_node_bridge) is not GraphNodeOwnerBridge
             or graph_node_bridge.stage!=dashboard.stage):
@@ -455,6 +457,7 @@ def configured_browser_api(dashboard, *, clear_profile=None, prod_owner_bridge=N
             value=queue_snapshot(control,identity=identity,database=dashboard.db,
                 interactive_enabled=current['interactive_enabled'],limit=limit,offset=offset,
                 lane=dashboard.stage,can_change=True,session_control=True,batch_cards=True,
+                batch_remove=native_test_batch_removal,
                 clear_ready=clear_enabled and not ordinary_test_clear and current['generation']==release_pin)
             if 'database_clear' in value and scope_pin is not None and value['database_clear']['scope']!=scope_pin:
                 value['database_clear']['can_clear']=False
