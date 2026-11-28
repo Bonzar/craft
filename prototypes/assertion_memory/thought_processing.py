@@ -1,7 +1,6 @@
 """Canonical worker lanes, retaining the existing supervisor's exclusive pause lock."""
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
-from dataclasses import replace
 from datetime import datetime, timezone
 import json
 import signal
@@ -291,12 +290,6 @@ class TracedThoughtWorker(ThoughtWorker):
                 if request != expected or tuple(bindings) != tuple(expected_bindings):
                     raise ModelError('Capture source inputs changed before verification')
                 return draft.body
-            if task.startswith('Verify '):
-                request = replace(request, instructions=request.instructions + (
-                    '\nPackage coverage is checked separately. Your scope here is local entailment, '
-                    'eligible meaning and exact attribution of each retained draft; do not require '
-                    'repetition for coverage or report missing meanings here. Only the original '
-                    'local citation options can support this source.'))
             return fallback(task, request, bindings)
         engine.gateway = gateway
         try:
@@ -305,14 +298,14 @@ class TracedThoughtWorker(ThoughtWorker):
             decoded, selections = engine._construct_drafts(catalog, wire, instructions)
             keep = list(range(len(decoded)))
             if len(decoded) > 1:
-                review = engine._review_source_drafts(decoded, selections, catalog, origin, [])
+                review = engine._review_source_drafts(decoded, selections, catalog, origin, [], capture_local=True)
                 if review['missing_meaning'] is not None:
                     raise ModelError('Unexpected omission in capture source-local entailment')
                 rejected = {row['draft'] for row in review['rejected_drafts']}
                 keep = [i for i in keep if i not in rejected]
             elif decoded:
                 engine._verify([decoded[0][0]], records, bases, origin,
-                               support_catalog=catalog, support_selections=selections)
+                               capture_local=True, support_catalog=catalog, support_selections=selections)
             body = json.loads(draft.body)
             selected = [{**decoded[i][0], 'support_fragments':selections[i]} for i in keep]
             if selected != body['thoughts']:

@@ -195,6 +195,10 @@ def verify_capture_group_coverage(group, drafts, generate, *, allow_discard=True
         'draft list is valid if it adds no material change or its eligible meaning is already '
         'represented with appropriate scope and qualifications by another source draft. '
         + ('First list any ineligible or unsupported draft in discard_drafts by source and zero-based index. '
+           'A speculative match or a task-only search update with no lasting significance '
+           'does not contribute to material coverage. Judge completeness after discarding '
+           'ineligible drafts. Assess each remaining meaning and its qualifications on its own '
+           'evidence. Uncertainty about one claim is not a missing qualification of another. '
            if allow_discard else
            'These selected drafts already passed source-local entailment. This is a coverage-only recheck. '
            'Do not remove any further drafts: discard_drafts must be empty. ')

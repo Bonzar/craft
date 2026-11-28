@@ -193,6 +193,27 @@ draft fails. Do not return per-draft indices, identifiers or individual verdicts
 '''
 _FINAL_VERDICT = 'For a final verdict use "accept" or "reject" and give the semantic reason in text.\n'
 
+_CAPTURE_LOCAL_RULES = CONTENT_RULES + SITUATION_ROLES + """
+Review each proposed draft against its own selected original fragments.
+Preserve the meaning, attribution, scope, timing and degree of certainty of
+each source statement. The source's statement establishes what it reported;
+independent evidence is needed only for a claim of independent verification.
+Do not transfer doubt between claims or promote a hypothesis to a fact.
+When a reference matters to a claim, keep the binding to the original fragment.
+Do not infer the reference's contents or a current outcome from the reference alone.
+Use other material only to resolve references and constraints within the selected
+grounds. Evaluate only the proposed drafts. Package coverage is handled separately.
+"""
+
+CAPTURE_LOCAL_VERIFY = _CAPTURE_LOCAL_RULES + _ATOMIC_DRAFT_VERDICTS + _FINAL_VERDICT
+
+CAPTURE_LOCAL_DRAFT_REVIEW = _CAPTURE_LOCAL_RULES + """
+Return rejected_drafts with the local draft index and a precise reason for each
+draft that fails. Accept when rejected_drafts is empty, otherwise reject.
+Use null for the missing_meaning schema field. If requesting a drill, return
+no rejected drafts. Give a semantic reason in text.
+"""
+
 VERIFY = CONTENT_RULES + SITUATION_ROLES + f'''
 Review ALL draft records as one bound batch against the exact supplied material.
 Check two independent obligations: (1) every retained claim follows from its own

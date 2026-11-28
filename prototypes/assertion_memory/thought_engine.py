@@ -13,7 +13,7 @@ from .model import CandidateSearch, ModelContextExceeded, ModelError, ModelReque
 from .thought_source_policy import event_eligibility, thought_eligibility
 from .thought_engine_inputs import RAW_CHUNK_CHARACTERS, paragraph_chunks
 from .thought_engine_contract import (APPLICABILITY, construction_instructions, GROUNDING,
-    MAX_THOUGHTS, PROTOCOL, SOURCE_BATCH, VERIFY, WHOLE_REFRESH, VERIFICATION_RULES, INDEPENDENT_SOURCE_REVIEW,
+    MAX_THOUGHTS, PROTOCOL, SOURCE_BATCH, CAPTURE_LOCAL_VERIFY, CAPTURE_LOCAL_DRAFT_REVIEW, VERIFY, WHOLE_REFRESH, VERIFICATION_RULES, INDEPENDENT_SOURCE_REVIEW,
     REPAIR_SOURCE_DRAFTS, exact_fields, object_response, semantic_text,
     thought_drafts, validate_response, SupportQuoteMissing, RAW_PASSAGE, SemanticReviewRejected, QUERY_REPAIR)
 from .thought_schema import response_schema
@@ -206,7 +206,8 @@ class ThoughtEngine:
                 pending.append(latest)
         return True
 
-    def _verify(self, drafts, records, bases, origin=None, *, source_batch=False, support_catalog=None, support_selections=None):
+    def _verify(self, drafts, records, bases, origin=None, *, source_batch=False, capture_local=False,
+                support_catalog=None, support_selections=None):
         whole = any(record.get('role') == 'whole_refresh_scope' for record in records)
         raw = not whole and (source_batch or any(record.get('role') == 'source' for record in records))
         if support_catalog is None or support_selections is None:
@@ -218,7 +219,9 @@ class ThoughtEngine:
         task = 'Verify source thought batch' if source_batch else 'Verify thought'
         comparison = 'overview' if any(row.get('role') == 'overview_comparison' for row in records) else whole
         instructions = VERIFY + (RAW_PASSAGE if raw else '') + (SOURCE_BATCH if source_batch else '') + (WHOLE_REFRESH if whole else '')
-        if any(record.get('role')=='cross_passage_hypotheses' for record in records):
+        if capture_local:
+            instructions = CAPTURE_LOCAL_VERIFY
+        elif any(record.get('role')=='cross_passage_hypotheses' for record in records):
             instructions += ('\nCross-passage hypotheses are untrusted coverage notes, not evidence. '
                 'Check this entire RAW passage for omitted meaning and qualifications of those hypotheses. '
                 'Reject unsupported cross-passage connections or unresolved conflicts; require exact cited text '
@@ -446,12 +449,14 @@ class ThoughtEngine:
     def _accepted_coverage(accepted):
         return [{'role': 'accepted_coverage', **draft} for draft, _ in accepted]
 
-    def _review_source_drafts(self, drafts, selections, catalog, origin, accepted):
+    def _review_source_drafts(self, drafts, selections, catalog, origin, accepted, *, capture_local=False):
         packet = [*catalog.selected_packet(selections), *self._accepted_coverage(accepted)]
         draft_records = [{'role': 'draft', 'draft': index, **draft, 'support_fragments': selections[index],
                           'origin': self._model_origin(origin)} for index, (draft, _) in enumerate(drafts)]
+        instructions = (CAPTURE_LOCAL_DRAFT_REVIEW if capture_local else
+                        VERIFICATION_RULES + RAW_PASSAGE + INDEPENDENT_SOURCE_REVIEW)
         return self._review_with_originals(packet, draft_records, catalog.bases,
-            VERIFICATION_RULES + RAW_PASSAGE + INDEPENDENT_SOURCE_REVIEW, catalog, selections,
+            instructions, catalog, selections,
             source_draft_count=len(draft_records))
 
     def _verify_source_batch(self, prepared, records, bases, origin):
