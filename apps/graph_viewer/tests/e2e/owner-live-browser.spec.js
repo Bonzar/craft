@@ -468,3 +468,41 @@ test('packed owner cancels or confirms the deletion of a complete pending batch'
     counts:{memory_raw_events:0,memory_capture_jobs:0},replay_denied:true,
   });
 });
+
+test('packed owner enrolls and revokes a device without sharing its key',async({nativeBrowser:{context,page}})=>{
+  test.skip(process.env.GRAPH_BROWSER_VARIANT!=='packed','device UI is part of the packed release');
+  const base=realpathSync(process.env.GRAPH_BROWSER_FIXTURE);
+  const origin='https://127.0.0.1:'+Number(readFileSync(join(base,'batch-port'),'utf8'));
+  await context.route('**/*',route=>{
+    const url=new URL(route.request().url());
+    return url.origin===origin||['about:','blob:','data:'].includes(url.protocol)?route.continue():route.abort();
+  });
+  const devicePath='/api/v1/processing/devices';
+  const readRegistry=()=>page.request.get(origin+devicePath);
+  await page.goto(origin+'/visual/');
+  const devices=page.locator('#owner-devices');
+  await expect(devices).toBeHidden();
+  expect((await readRegistry()).status()).toBe(401);
+  await page.locator('#password').fill('synthetic-only-owner');
+  await page.locator('#login-button').click();
+  await page.locator('#visual-queue-open').click();
+  await expect(devices).toBeVisible();
+  await expect(devices.getByText('Окружение: TEST')).toBeVisible();
+  const label='Fictional travel laptop';
+  // A synthetic digest only; no bearer key is created or passed to the page.
+  const digest='a'.repeat(64);
+  await devices.getByLabel('Название').fill(label);
+  await devices.getByLabel('Отпечаток SHA‑256').fill('sha256:'+digest);
+  await devices.getByRole('button',{name:'Проверить устройство'}).click();
+  const confirm=devices.getByRole('button',{name:'Подтвердить',exact:true});
+  await expect(confirm).toBeVisible();
+  expect((await (await readRegistry()).json()).items).toEqual([]);
+  await confirm.click();
+  const item=devices.getByRole('listitem').filter({hasText:label});
+  await expect(item).toBeVisible();
+  expect((await (await readRegistry()).json()).items).toEqual([{fingerprint:digest,label,revocable:true}]);
+  await item.getByRole('button',{name:'Отозвать'}).click();
+  await confirm.click();
+  await expect(item).toHaveCount(0);
+  expect((await (await readRegistry()).json()).items).toEqual([]);
+});

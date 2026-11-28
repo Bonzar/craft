@@ -83,6 +83,7 @@ def canonical_preview_fixture(run, static, cert, key):
 
 def packed_batch_fixture(run, static, cert, key):
     from prototypes.assertion_memory.capture_batch import capture, authorized_machine_batch
+    from prototypes.assertion_memory.machine_device_registry import MachineDeviceRegistry
     from prototypes.assertion_memory.mcp_server import ServiceConfig
     from prototypes.assertion_memory.queue_owner_domain import owner_operations
     from prototypes.assertion_memory.queue_rest import snapshot
@@ -133,6 +134,8 @@ def packed_batch_fixture(run, static, cert, key):
     sock.listen(16)
     port = sock.getsockname()[1]
     browser = BrowserOwnerAPI(stage='test', perform=perform, queue_snapshot=project, dashboard_live=False)
+    registry = MachineDeviceRegistry.initialize(run / 'qa-managed-devices.sqlite3', 'test')
+    browser.attach_machine_devices(registry, nullcontext, identity)
     app = create_app(db, run / 'batch-state', password='synthetic-only-owner',
                      synthetic_fixture=True, public_origin=f'https://127.0.0.1:{port}',
                      browser_owner_api=browser)
