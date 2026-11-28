@@ -52,7 +52,7 @@ def base_graph_component(stage, state, *, browser, dashboard, source_hint=None, 
     return create_app(lane.base.db,state,public_origin=lane.origin,browser_owner_api=browser,**opts)
 
 def base_browser_app(stage, *, config, private_port, verified_identity, release_lease,
-                     interactive, machine_devices=None, test_dashboard=None):
+                     interactive, machine_devices=None, test_dashboard=None, private_owner_queue=None):
     """Composition only; caller owns authorization, OS and listener custody."""
     from apps.graph_viewer.server.browser_owner_api import configured_browser_api
     from apps.graph_viewer.server.queue_dashboard import HostedQueueDashboard
@@ -66,14 +66,14 @@ def base_browser_app(stage, *, config, private_port, verified_identity, release_
         if (stage!='test' or type(test_dashboard) is not HostedQueueDashboard
                 or test_dashboard.stage!='test' or test_dashboard.db!=lane.base.db
                 or not callable(test_dashboard.activation)
-                or machine_devices is not None):
+                or machine_devices is not None or private_owner_queue is not None):
             raise ValueError('Wrong existing TEST Base scheduler projection')
         browser=configured_browser_api(test_dashboard,ordinary_test_clear=True)
     else:
         if stage=='test':
             raise ValueError('Canonical TEST Base scheduler projection required')
         browser=base_owner_browser(stage=stage,config=config,verified_identity=verified_identity,
-            release_lease=release_lease,interactive_enabled=interactive,
+            release_lease=release_lease,interactive_enabled=interactive,private_owner_queue=private_owner_queue,
             **({} if machine_devices is None else {'machine_devices':machine_devices}))
     graph=base_graph_component(stage,state,browser=browser,dashboard=test_dashboard,existing_owner_only=True,
                      native_test_dashboard=test_dashboard,

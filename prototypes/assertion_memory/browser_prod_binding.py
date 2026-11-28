@@ -113,13 +113,14 @@ def configured_prod_browser_lifespan(config, *, private_port, interactive_enable
     canonical_lane('prod',config=config,private_port=private_port)
     _identity(PROD.root,'prod')  # Validate loaded bytes without taking the release lease.
 
-    def lifespan(*, interactive_active=False):
+    def lifespan(*, interactive_active=False, private_owner_queue=None):
         _require_legacy_graph_stopped()
         from .browser_listener import browser_listener
         app=base_browser_app('prod',config=config,private_port=private_port,
             verified_identity=partial(_identity,PROD.root,'prod'),
             release_lease=partial(release_lease,PROD,uid=uid),
             interactive=interactive_active if interactive_enabled is None else interactive_enabled,
+            private_owner_queue=private_owner_queue,
             **({} if machine_devices is None else {'machine_devices':machine_devices}))
         return browser_listener(app,PROD_BROWSER_PORT,on_failure=on_failure)
 

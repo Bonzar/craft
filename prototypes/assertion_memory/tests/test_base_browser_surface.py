@@ -41,25 +41,29 @@ class SingleDatabase(TestCase):
                 owner.reset_graph_bookmarks('assertion-memory','0'*32)
                 cookie,_=owner.login('synthetic only',key)
                 lane=replace(profile,base=replace(profile.base,root=lane_root,db=db))
-                config=SimpleNamespace(db=db,provider='none',processing_session_ids=[],auto_process_fresh_mac=False)
+                config=SimpleNamespace(db=str(db),provider='none',processing_session_ids=[],auto_process_fresh_mac=False)
                 opts[key]=(lane,config,cookie)
                 origins[key]=lane.origin
             with (patch.object(surface,'LANES',{key:cfg[0] for key,cfg in opts.items()}),
-                  patch.dict(queue_dashboard.SCOPES,{'test':('assertion-test-deploy',opts['test'][1].db)}),
+                  patch.dict(queue_dashboard.SCOPES,{'test':('assertion-test-deploy',Path(opts['test'][1].db))}),
                   patch('pwd.getpwnam',return_value=SimpleNamespace(pw_uid=994))):
                 clients={}
                 identity=lambda:('fixture-release','a'*64)
                 for key,(lane,cfg,cookie) in opts.items():
                     dashboard=None
                     if key=='test':
-                        dashboard=queue_dashboard.HostedQueueDashboard('test',projection_path('test'),cfg.db,
+                        dashboard=queue_dashboard.HostedQueueDashboard('test',projection_path('test'),Path(cfg.db),
                             activation=lambda:('a'*40,'b'*64))
                         dashboard.metadata=lambda:dict(release_version='fixture-release',generation='a'*64,
                             auto_process_fresh_mac=False,processing_session_ids=[],
                             model_configured=False,interactive_enabled=False)
                         dashboard.release_lease=nullcontext
+                    private=None if key=='test' else SimpleNamespace(
+                        queue_pause_ready=lambda:True,queue_clear_database=Path(cfg.db),
+                        queue_clear_route=lambda *_:self.fail('Browser bypassed owner proof via legacy REST'))
                     app=surface.base_browser_app(key,config=cfg,private_port=lane.private_port,
-                        verified_identity=identity,release_lease=nullcontext,interactive=False,test_dashboard=dashboard)
+                        verified_identity=identity,release_lease=nullcontext,interactive=False,test_dashboard=dashboard,
+                        private_owner_queue=private)
                     client=self.enterContext(TestClient(app,base_url=lane.origin,cookies={COOKIE:cookie}))
                     clients[key]=client
                     for _ in range(60):
@@ -73,9 +77,16 @@ class SingleDatabase(TestCase):
                 with patch.object(surface,'LANES',{key:cfg[0] for key,cfg in opts.items()}):
                     with self.assertRaisesRegex(ValueError,'canonical Base lane'):
                         surface.canonical_lane('prod',config=opts['test'][1],private_port=8903)
+                for key,c in clients.items():
+                    cap=c.get('/api/v1/capabilities').json()
+                    self.assertTrue(cap['owner_live_graph_v1'])
+                    with patch('apps.graph_viewer.server.owner_graph_stream.LIVE_SECONDS',.10):
+                        stream=c.get('/api/v1/events?wire=graph-v1')
+                    self.assertEqual(stream.status_code,200,stream.text)
+                    self.assertIn('event: hello',stream.text)
                 def paused(key):
                     cfg=opts[key][1]
-                    data=snapshot(cfg,identity=identity,database=cfg.db,interactive_enabled=False,
+                    data=snapshot(cfg,identity=identity,database=Path(cfg.db),interactive_enabled=False,
                                   limit=1,offset=0,lane=key,session_control=True)
                     return data['processing_control']['paused']
                 for key in ('test','prod'):
@@ -111,6 +122,20 @@ class SingleDatabase(TestCase):
                     with MemoryStore(opts[key][1].db) as store:
                         with store.transaction() as db:
                             self.assertEqual(db.execute('SELECT count(*) FROM memory_thoughts').fetchone()[0],count)
+
+                # Same public API and owner session on the independently
+                # authorized synthetic PROD fixture, after isolation proof.
+                prod=clients['prod']; csrf=prod.get('/api/v1/session').json()['csrf_token']
+                headers={'Origin':origins['prod'],'X-CSRF-Token':csrf}
+                self.assertTrue(prod.get('/api/v1/capabilities?queue_status=1').json()['capabilities']['owner_database_clear_post'])
+                self.assertEqual(prod.post(clear,headers=headers,json={'confirmation':'ОЧИСТИТЬ TEST'}).status_code,400)
+                result=prod.post(clear,headers=headers,json={'confirmation':'ОЧИСТИТЬ PROD'})
+                self.assertEqual(result.status_code,200,result.text)
+                for _ in range(60):
+                    g=prod.get('/api/v1/graph?mode=current&history=0')
+                    if g.status_code==200 and g.json()['counts']['nodes']==0:break
+                    time.sleep(.02)
+                self.assertEqual(g.json()['counts']['nodes'],0)
 
     def test_base_packaged_standard_component_rejects_alternate_cli_selectors(self):
         from apps.graph_viewer.server.__main__ import main
