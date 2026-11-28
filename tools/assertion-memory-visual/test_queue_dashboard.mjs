@@ -5,7 +5,7 @@ import {readFile} from 'node:fs/promises';
 import {runInNewContext} from 'node:vm';
 const script=await readFile(new URL('./queue-dashboard.js',import.meta.url),'utf8');
 
-function harness({stage='test',control=null,session={authenticated:true},prepare,put,standalone=false,sessionPolicy=null,processingPolicy=null,observe=false,clear=null,clearWrite,legacyClearToken,sourceEpoch,startupPacked=false}={}){
+function harness({stage='test',control=null,session={authenticated:true},prepare,put,standalone=false,sessionPolicy=null,processingPolicy=null,observe=false,clear=null,clearWrite,legacyClearToken,legacyClearTransport=false,nativeProcessing=false,sourceEpoch,startupPacked=false}={}){
   class Element {
     constructor(tag=''){this.tag=tag;this.items=[];this.listeners={};this.open=false;this.dataset={};}
     addEventListener(name,fn){this.listeners[name]=fn;}
@@ -115,7 +115,7 @@ function harness({stage='test',control=null,session={authenticated:true},prepare
         return Response.json(next);
       }
       const offset=Number(url.split('offset=')[1]);
-      return Response.json({stage,release_generation:'e'.repeat(64),owner_live_epoch:sourceEpoch,database_clear:clear,...(legacyClearToken===undefined?{}:{owner_database_clear_csrf:legacyClearToken}),capabilities:{standalone_pause:standalone,standalone_queue_sessions:Boolean(sessionPolicy||processingPolicy),owner_database_clear_post:clear?.can_clear===true},processing_control:control,release_version:'assertion-memory-v1.2.3',queues:offset===0?data:
+      return Response.json({stage,release_generation:'e'.repeat(64),owner_live_epoch:sourceEpoch,database_clear:clear,...(legacyClearToken===undefined?{}:{owner_database_clear_csrf:legacyClearToken}),capabilities:{standalone_pause:standalone,queue_processing_policy:nativeProcessing,standalone_queue_sessions:Boolean(sessionPolicy||processingPolicy),owner_database_clear_post:clear?.can_clear===true,owner_database_clear_legacy_v1:legacyClearTransport},processing_control:control,release_version:'assertion-memory-v1.2.3',queues:offset===0?data:
         [{id:'source',status:'active',total:51,items:[{id:'second-page',status:'ready',phase:'extract',position:51}]}]});
     }});
   const signal=async()=>{events.at(-1).listeners.queue_changed();await delay();};
@@ -244,7 +244,7 @@ test('conflict, async acceptance and foreign-stage replies are never rendered as
 
 test('native TEST button uses POST prepare and never the pseudo-session token',async()=>{
   const ncsrf='1650000000.'+'d'.repeat(64);
-  const h=harness({control:{paused:false,revision:original,can_change:false},
+  const h=harness({standalone:true,control:{paused:false,revision:original,can_change:false},
     prepare:({paused,revision})=>Response.json({stage:'test',paused,revision,csrf_token:ncsrf})});
   await h.open();
   assert.equal(h.controlButton.hidden,false);
@@ -263,7 +263,7 @@ test('native prepare does not grant control on foreign lane or mismatched revisi
   const ncsrf='1650000000.'+'d'.repeat(64);
   const prepare=()=>Response.json({stage:'test',paused:false,revision:'e'.repeat(32),csrf_token:ncsrf});
   const control={paused:false,revision:original,can_change:false};
-  const test=harness({control,prepare}), prod=harness({stage:'prod',control,prepare});
+  const test=harness({standalone:true,control,prepare}), prod=harness({stage:'prod',control,prepare});
   await test.open();
   await prod.open();
   assert.equal(test.controlButton.hidden,true);
@@ -396,11 +396,11 @@ test('viewport preview reads are serialized, capped and not repeated by refresh'
   assert.equal(h.urls.filter(url=>url.endsWith('/source-preview')).length,7);
 });
 
-test('native TEST fallback probes once without a advertised standalone capability; no owner proof means no item controls', async()=>{
+test('no session capability means no probe and no item controls', async()=>{
  const h=harness({observe:true});
  h.setData([{id:'source',status:'active',total:1,items:[{id:'x',status:'ready',phase:'extract',remove_revision:'b'.repeat(32),preview_revision:'c'.repeat(32)}]}]);
  await h.open();await h.signal();
- assert.equal(h.urls.filter(x=>x.endsWith('/processing/sessions/prepare')).length,1);
+ assert.equal(h.urls.filter(x=>x.endsWith('/processing/sessions/prepare')).length,0);
  assert.equal(h.sessionPanel.hidden,true);
  assert.doesNotMatch(h.text(h.container),/Удалить реплику|Показать текст/);
 });
@@ -478,7 +478,7 @@ for(const stage of ['test','prod'])test(stage+' clear sends one owner-CSRF POST 
 
 test('legacy PROD owner queue authorizes one protected PUT without relying on bare Graph session',async()=>{
   const token='123.'+'a'.repeat(64), refreshed='124.'+'b'.repeat(64);
-  const h=harness({stage:'prod',session:{authenticated:true},clear:{can_clear:true},legacyClearToken:token});
+  const h=harness({stage:'prod',session:{authenticated:true},clear:{can_clear:true},legacyClearToken:token,legacyClearTransport:true});
   await h.open();
   const get=h.clearNode;
   get('clear-open').listeners.click();
@@ -491,7 +491,7 @@ test('legacy PROD owner queue authorizes one protected PUT without relying on ba
   assert.ok(!h.urls.includes('/api/v1/session'));
 });
 
-test('legacy queue ticket without exact PROD owner clear capability never authorizes a write',async()=>{
+test('legacy queue ticket without an explicit clear transport capability never authorizes a write',async()=>{
   for(const [stage,clear,legacyClearToken] of [
     ['test',{can_clear:true},'123.'+'a'.repeat(64)],
     ['prod',{can_clear:true},'wrong token'],
@@ -544,7 +544,7 @@ test('clear distinguishes proved pre-write rejection from an unconfirmed result 
     const phrase='ОЧИСТИТЬ '+stage.toUpperCase();
     const token=method==='PUT'?'123.'+'a'.repeat(64):'a'.repeat(64);
     const h=harness({stage,clear:{can_clear:true},session:{authenticated:true,csrf_token:token},
-      ...(method==='PUT'?{legacyClearToken:token}:{}),
+      ...(method==='PUT'?{legacyClearToken:token,legacyClearTransport:true}:{}),
       clearWrite:()=>Response.json(response,{status}),
     });
     await h.open();
@@ -627,4 +627,10 @@ test('packed and native Graph load a validated owner snapshot without waiting fo
     await boot.call(app);
     assert.deepEqual(calls,['stop','snapshot badge','scene','snapshot'],ownerBoot);
   }
+});
+
+for(const stage of ['test','prod'])test(stage+' owner UI respects explicit native capabilities',async()=>{
+  const h=harness({stage,nativeProcessing:true});
+  await h.open();
+  assert.equal(h.urls.filter(x=>x.endsWith('/processing/sessions/prepare')).length,1);
 });
