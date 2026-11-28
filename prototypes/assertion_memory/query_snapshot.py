@@ -11,6 +11,7 @@ import json
 from dataclasses import asdict, dataclass, fields
 from datetime import datetime, timezone
 
+from . import query_timing as timing
 from .storage import _timestamp, _visibility, _decode
 from .question_routes import dependency_definitions
 
@@ -64,6 +65,7 @@ class QuerySnapshot:
         from .answer_source_gaps import inventory
         return inventory(self.source_processing_evidence,scopes)
 
+    @timing.timed('relation_frontier')
     def relation_gaps(self, scopes=()):
         from .answer_relation_gaps import inventory
         value=inventory(self.relation_processing_evidence,scopes,self.assertions)
