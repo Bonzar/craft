@@ -10,11 +10,12 @@ import socket
 import stat
 
 from .queue_pause_binding import PROD, release_lease
-from .queue_rest import _checked_file, _identity, exact_database
+from .queue_rest import _checked_file, _identity
+from .base_browser_surface import LANES, canonical_lane, base_browser_app
 
 PROD_BROWSER_PORT=8902
 PROD_PRIVATE_PORT=8903
-PROD_OWNER_ORIGIN='https://d5dus2psgclvh5ulbtbh.fovt0b64.apigw.yandexcloud.net'
+PROD_OWNER_ORIGIN=LANES['prod'].origin
 PROD_OWNER_STATE=PROD.root/'state'/'graph-state'
 PROD_HTTP_CONFIG=PROD.root/'state'/'http.json'
 PROD_SWITCH=PROD.authority/'base-browser-listener.json'
@@ -25,6 +26,7 @@ _CAPABILITY='BASE_BROWSER_LISTENER_CONTRACT'
 _CAPABILITY_V1=b'assertion-memory-base-browser-listener-v1\n'
 _MAIN='prototypes/assertion_memory/http_server.py'
 _BINDING='prototypes/assertion_memory/browser_prod_binding.py'
+_SURFACE='prototypes/assertion_memory/base_browser_surface.py'
 
 def _capable_release(root):
     # _identity proves the exact loaded physical release and its sealed
@@ -43,7 +45,7 @@ def _capable_release(root):
         except FileNotFoundError:
             return False
         raise ValueError('Unsealed browser capability marker')
-    for name, limit in ((_CAPABILITY,128),(_MAIN,65536),(_BINDING,65536)):
+    for name, limit in ((_CAPABILITY,128),(_MAIN,65536),(_BINDING,65536),(_SURFACE,65536)):
         raw=_checked_file(path/name,limit)
         if entries(name)!=[sha256(raw).hexdigest()+'  ./'+name]:
             raise ValueError('Unverified Base browser capability member')
@@ -105,27 +107,20 @@ def installed_prod_browser_lifespan(config_path, config, *, private_port, on_fai
 
 def configured_prod_browser_lifespan(config, *, private_port, interactive_enabled, on_failure=None, machine_devices=None):
     """Call only after protected legacy login-writer retirement is recorded."""
-    if private_port != PROD_PRIVATE_PORT or Path(config.db) != PROD.db:
-        raise ValueError('Browser endpoint requires exact PROD Base authority')
     uid=pwd.getpwnam(PROD.account).pw_uid
     if uid<=0 or os.geteuid()!=uid or os.getuid()!=uid:
         raise ValueError('Unexpected PROD Base writer identity')
-    exact_database(PROD.db)
+    canonical_lane('prod',config=config,private_port=private_port)
     _identity(PROD.root,'prod')  # Validate loaded bytes without taking the release lease.
 
     def lifespan(*, interactive_active=False):
         _require_legacy_graph_stopped()
-        from apps.graph_viewer.server.app import create_app
         from .browser_listener import browser_listener
-        from .browser_owner_binding import base_owner_browser
-        from .browser_surface import browser_surface
-        browser=base_owner_browser(stage='prod',config=config,
+        app=base_browser_app('prod',config=config,private_port=private_port,
             verified_identity=partial(_identity,PROD.root,'prod'),
             release_lease=partial(release_lease,PROD,uid=uid),
-            interactive_enabled=interactive_active if interactive_enabled is None else interactive_enabled,
+            interactive=interactive_active if interactive_enabled is None else interactive_enabled,
             **({} if machine_devices is None else {'machine_devices':machine_devices}))
-        graph=create_app(PROD.db,PROD_OWNER_STATE,public_origin=PROD_OWNER_ORIGIN,
-                         browser_owner_api=browser,existing_owner_only=True)
-        return browser_listener(browser_surface(graph),PROD_BROWSER_PORT,on_failure=on_failure)
+        return browser_listener(app,PROD_BROWSER_PORT,on_failure=on_failure)
 
     return lifespan

@@ -11,6 +11,7 @@ FILES = (
     'prototypes/assertion_memory/browser_surface.py',
     'prototypes/assertion_memory/browser_owner_binding.py',
     'prototypes/assertion_memory/browser_prod_binding.py',
+    'prototypes/assertion_memory/base_browser_surface.py',
     'apps/graph_viewer/server/app.py',
     'apps/graph_viewer/server/browser_owner_api.py',
     'apps/graph_viewer/server/existing_owner_store.py',
