@@ -92,7 +92,7 @@ def configure_owner_lanes(args, *, prod_owner_api=None):
 
 def main(*, prod_owner_api=None):
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--source',type=Path,required=True)
+    parser.add_argument('--source',type=Path,help='Required for standalone viewer; assertion only for the Base-owned component')
     parser.add_argument('--state-dir',type=Path,required=True)
     parser.add_argument('--port',type=int,default=8791)
     parser.add_argument('--host',default='127.0.0.1',choices=['127.0.0.1','::1'])
@@ -121,6 +121,12 @@ def main(*, prod_owner_api=None):
     parser.add_argument('--static-dir',type=Path,default=Path(__file__).resolve().parents[1]/'web'/'dist')
     args=parser.parse_args()
     try:
+        if args.browser_owner_api:
+            from prototypes.assertion_memory.base_browser_surface import canonical_browser_owner
+            lane=canonical_browser_owner(args.queue_status_stage,source_hint=args.source,origin_hint=args.public_origin)
+            args.source,args.public_origin=lane.base.db,lane.origin
+        elif args.source is None:
+            raise ValueError('Standalone viewer requires a source')
         validate_static_directory(args.static_dir,args.source,args.state_dir,
                                   args.password_file,args.bridge_read_token_file,args.embedding_cache,args.queue_status_config)
     except ValueError as error:
@@ -143,7 +149,18 @@ def main(*, prod_owner_api=None):
         owner_snapshot_events=owner_snapshot_enabled(dashboard=queue_dashboard,browser=browser,explicit_test=args.owner_snapshot_events)
     except (OSError,ValueError,KeyError,TypeError) as error:
         parser.error(str(error))
-    app=create_app(args.source,args.state_dir,password=password,provider_id=args.provider_id,static_dir=args.static_dir,semantic_model=model,synthetic_fixture=args.synthetic_fixture,public_origin=args.public_origin,allowed_proxy_hosts=args.allowed_proxy_host,bridge_read_token_file=args.bridge_read_token_file,queue_dashboard=queue_dashboard,queue_control=args.queue_control,database_clear_lane=args.database_clear_lane,database_clear_read_token_file=args.database_clear_read_token_file,test_direct_events_origin=args.test_direct_events_origin,browser_owner_api=browser,owner_snapshot_events=owner_snapshot_events)
+    opts=dict(password=password,provider_id=args.provider_id,static_dir=args.static_dir,
+        semantic_model=model,synthetic_fixture=args.synthetic_fixture,allowed_proxy_hosts=args.allowed_proxy_host,
+        bridge_read_token_file=args.bridge_read_token_file,queue_dashboard=queue_dashboard,
+        queue_control=args.queue_control,database_clear_lane=args.database_clear_lane,
+        database_clear_read_token_file=args.database_clear_read_token_file,
+        test_direct_events_origin=args.test_direct_events_origin,owner_snapshot_events=owner_snapshot_events)
+    if args.browser_owner_api:
+        from prototypes.assertion_memory.base_browser_surface import base_graph_component
+        app=base_graph_component(args.queue_status_stage,args.state_dir,browser=browser,dashboard=queue_dashboard,
+                                 source_hint=args.source,origin_hint=args.public_origin,**opts)
+    else:
+        app=create_app(args.source,args.state_dir,public_origin=args.public_origin,**opts)
     uvicorn.run(app,host=args.host,port=args.port,access_log=False,proxy_headers=False,server_header=False)
 
 
