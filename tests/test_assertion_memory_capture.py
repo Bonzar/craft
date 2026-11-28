@@ -163,11 +163,12 @@ class CaptureTest(unittest.TestCase):
     def abort(self, turn):
         self.append({'type':'event_msg','payload':{'type':'turn_aborted','turn_id':turn,'reason':'interrupted'}})
 
-    def test_interrupted_users_are_committed_once_in_next_batch_after_restart(self):
+    def test_interrupted_visible_dialogue_commits_once_in_next_batch_after_restart(self):
         self.config['capture_batch'] = True
         self.capture.register(self.store, self.raw)
         self.turn('request A','a','u-a')
-        self.assistant('partial assistant A','a-a',channel='commentary')
+        self.commentary('visible assistant A','a-a')
+        self.commentary('private analysis A','private-a',phase='analysis')
         self.abort('a')
         self.turn('request B','b','u-b')
         self.pair('additional B','b','u-b2')
@@ -183,18 +184,79 @@ class CaptureTest(unittest.TestCase):
         self.addCleanup(self.store.close)
         self.turn('request C','c','u-c')
         self.assistant('completed assistant C','a-c')
-        self.assertEqual(self.poll()['queued'],5)
+        self.assertEqual(self.poll()['queued'],6)
         selected=[m['arguments'] for m in self.messages()]
         self.assertEqual([a['text'] for a in selected],
-            ['request A','request B','additional B','request C','completed assistant C'])
-        self.assertEqual([a['role'] for a in selected],['user','user','user','user','assistant'])
+            ['request A','visible assistant A','request B','additional B','request C','completed assistant C'])
+        self.assertEqual([a['role'] for a in selected],['user','assistant','user','user','user','assistant'])
         ids=[a['message_id'] for a in selected]
-        self.assertEqual(len(set(ids)),5)
+        self.assertEqual(len(set(ids)),6)
         self.assertTrue(all(a['_capture_batch']==selected[0]['_capture_batch'] for a in selected))
         self.assertEqual(selected[0]['_capture_batch']['message_ids'],ids)
         self.assertNotIn('interrupted_users',self.store.session('physical'))
+        self.assertNotIn('interrupted_assistants',self.store.session('physical'))
         self.assertFalse(self.store.summary('physical')['pending_turn_completion'])
         self.assertEqual(self.poll()['queued'],0)
+
+    def test_interrupted_visible_dialogue_resumes_same_enrollment_and_sends_one_batch(self):
+        from .test_assertion_memory_frontier import FakeRemote
+        from synthetic_memory_adapter.frontier import Coordinator
+        from synthetic_memory_adapter.outbox import watching_marker
+        import os
+
+        header=json.loads(self.path.read_bytes())
+        header['timestamp']='2025-01-01T00:00:00+00:00'
+        self.path.write_text(json.dumps(header)+'\n',encoding='utf-8')
+        fresh='2024-01-01T00:00:00+00:00'
+        self.config['capture_batch']=True
+        self.capture.register(self.store,self.raw,fresh_since=fresh)
+        self.turn('initial','first','u1')
+        self.commentary('visible progress','progress')
+        self.abort('first')
+        self.assertEqual(self.poll()['queued'],0)
+        state=self.store.session('physical')
+        marker=watching_marker(self.store.root,'physical')
+        marker.parent.mkdir(exist_ok=True)
+        marker.touch()
+        os.utime(marker,(1_735_689_600,1_735_689_600))
+        with self.store.db:
+            self.store.save_session(state | {'watching':False})
+        self.capture.resume_enrolled(self.store,self.raw | {'source':'resume'},fresh_since=fresh)
+        self.append({'type':'event_msg','timestamp':'2025-01-02T00:00:00+00:00',
+            'payload':{'type':'task_started','turn_id':'second','root_turn_id':'second',
+                'turn_attribution':{'turn_trigger':None,'parent_turn_id':None,
+                    'initiating_agent_path':None,'root_turn_id':'second'}}})
+        self.pair('continue','second','u2')
+        self.assistant('finished','a2')
+        remote=FakeRemote()
+        coordinator=Coordinator(self.store,remote)
+        coordinator.observe('physical',self.poll())
+        self.assertEqual(coordinator.tick(limit=1)['acknowledged'],4)
+        self.assertEqual(coordinator.tick(limit=1)['acknowledged'],0)
+        self.assertFalse(any(name=='memory_capture_message' for name,_ in remote.calls))
+        sends=[args for name,args in remote.calls if name=='memory_capture_batch']
+        self.assertEqual(len(sends),1)
+        self.assertEqual([m['text'] for m in sends[0]['messages']],
+                         ['initial','visible progress','continue','finished'])
+
+    def test_interrupted_visible_commentary_keeps_its_original_witness(self):
+        self.config['capture_batch']=True
+        self.capture.register(self.store,self.raw)
+        self.turn('first','first','u1')
+        self.commentary('original visible bytes','progress')
+        self.abort('first')
+        # Push that record outside the tail checkpoint so only its own persisted
+        # witness can detect a same-length change after reopening.
+        for _ in range(4):
+            self.append({'type':'compacted','payload':{'text':'x'*2000}})
+        self.assertEqual(self.poll()['queued'],0)
+        self.assertEqual(len(self.store.session('physical')['interrupted_assistants']),1)
+        self.path.write_bytes(self.path.read_bytes().replace(b'original visible bytes',b'modified visible bytes'))
+        self.turn('next','second','u2')
+        self.assistant('complete','a2')
+        with self.assertRaisesRegex(ValueError,'Retained native proof bytes changed'):
+            self.poll()
+        self.assertEqual(self.messages(),[])
 
     def test_interrupted_singleton_requires_existing_human_proof(self):
         self.config['capture_batch'] = True
@@ -224,12 +286,15 @@ class CaptureTest(unittest.TestCase):
         self.config['capture_batch']=True
         self.capture.register(self.store,self.raw,fresh_since='2024-01-01T00:00:00+00:00')
         self.turn('old','first','u1')
+        self.commentary('old visible progress','progress')
         self.abort('first')
         self.assertEqual(self.poll()['queued'],0)
         state=self.store.session('physical')
         self.assertEqual(len(state['interrupted_users']),1)
+        self.assertEqual(len(state['interrupted_assistants']),1)
         reset=self.capture.arm_database_reset_boundary(state,clock_ns=lambda:0)
         self.assertEqual(reset['interrupted_users'],[])
+        self.assertEqual(reset['interrupted_assistants'],[])
         self.assertEqual(reset['interrupted_user_witnesses'],[])
 
     def test_oversized_interrupted_batch_is_retained_and_never_split(self):
