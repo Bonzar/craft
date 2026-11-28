@@ -619,8 +619,8 @@
     stream.addEventListener('queue_changed',received);
   }
   addEventListener('owner-live-startup',()=>{
-    startupPending=true;fetchAbort?.abort();stream?.close();stream=null;
-    if(panel.open)status.textContent='Подключаемся к live-потоку…';
+    // Graph startup gates only the optional queue stream, not the owner REST snapshot.
+    startupPending=true;stream?.close();stream=null;
   });
   addEventListener('owner-live-offline',()=>{
     startupPending=false;startQueueFallback();if(panel.open)void refresh();
@@ -659,7 +659,7 @@
     return data;
   }
   async function refresh(){
-    if(!panel.open||startupPending)return;
+    if(!panel.open)return;
     if(loading){dirty=true;return;}
     loading=true;
     const current=generation, requested=new Map(offsets), epoch=controlEpoch, sourceEpoch=directQueueEpoch;

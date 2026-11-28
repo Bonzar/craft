@@ -587,3 +587,51 @@ test('packed TEST owner explicitly confirms removal through native writer',async
   expect((await api(at(target,current.data.revision))).status).toBe(404);
   expect((await api(at('/api/v1/nodes/'+encodeURIComponent(pins.survivor),current.data.revision))).status).toBe(200);
 });
+
+test('packed owner queue loads while Graph Live is still waiting for headers',async({nativeBrowser:{context,page}})=>{
+  test.skip(process.env.GRAPH_BROWSER_VARIANT!=='packed','queue overlay is part of the packed release');
+  const base=realpathSync(process.env.GRAPH_BROWSER_FIXTURE);
+  const origin='https://127.0.0.1:'+Number(readFileSync(join(base,'batch-port'),'utf8'));
+  let releaseLive,releaseQueue;
+  let liveRequests=0;
+  const holdLive=new Promise(resolve=>{releaseLive=resolve;});
+  const holdQueue=new Promise(resolve=>{releaseQueue=resolve;});
+  const graphReads=[],queueReads=[],mutations=[];
+  await context.route('**/*',async route=>{
+    const req=route.request(),url=new URL(req.url());
+    if(url.origin!==origin)return ['about:','blob:','data:'].includes(url.protocol)?route.continue():route.abort();
+    if(url.pathname==='/api/v1/graph'||url.pathname.startsWith('/api/v1/graph/'))graphReads.push(req.method());
+    if(/^\/api\/v1\/processing\/(?:items\/remove(?:\/prepare)?|database\/clear-v2|pause)$/.test(url.pathname)&&req.method()!=='GET')mutations.push(req.method());
+    if(url.pathname==='/api/v1/events'&&url.searchParams.get('wire')==='graph-v1'){
+      liveRequests++;await holdLive;return route.abort().catch(()=>{});
+    }
+    if(url.pathname==='/api/v1/capabilities'&&url.searchParams.get('queue_status')==='1'){
+      queueReads.push(req);await holdQueue;
+    }
+    return route.continue();
+  });
+  try{
+    await page.goto(origin+'/visual/');
+    await expect(page.locator('#visual-queue-open')).toBeHidden();
+    await page.locator('#password').fill('synthetic-only-owner');
+    await page.locator('#login-button').click();
+    await expect.poll(()=>liveRequests,{timeout:4000}).toBeGreaterThan(0);
+    await page.locator('#visual-queue-open').click();
+    await expect.poll(()=>queueReads.length,{timeout:4000}).toBeGreaterThan(0);
+    // Re-enter the ordinary queue listener's Graph startup signal before the
+    // explicit refresh receives headers, without touching auth or queue state.
+    await page.evaluate(()=>window.dispatchEvent(new CustomEvent('owner-live-startup')));
+    const first=queueReads[0];
+    const firstResponse=first.response();
+    releaseQueue();
+    expect((await firstResponse)?.status()).toBe(200);
+    const queue=page.locator('#visual-queue');
+    await expect(queue.locator('.queue-meta')).toHaveText(/^TEST · База /);
+    await expect(queue.getByRole('heading',{name:'Пакет реплик · 2',exact:true})).toBeVisible();
+    await queue.getByRole('button',{name:'Удалить пакет из очереди',exact:true}).click();
+    await expect(queue.getByRole('button',{name:'Подтвердить удаление',exact:true})).toBeVisible();
+    await queue.getByRole('button',{name:'Отмена',exact:true}).click();
+    expect(graphReads).toEqual([]);
+    expect(mutations).toEqual([]);
+  }finally{releaseQueue();releaseLive();}
+});
