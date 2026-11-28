@@ -332,7 +332,8 @@ async def capabilities(request):
         value['capabilities']['owner_node_removal_preview']=True
     owner_api=getattr(request.app.state,'browser_owner_api',None)
     if (getattr(owner_api,'node_removal',None) is not None
-            and request.app.state.owner.session(request) is not None):
+            and request.app.state.owner.session(request) is not None
+            and await owner_api.node_removal_available()):
         value['owner_graph_node_removal']={'version':1,'stage':owner_api.stage}
     if any(hasattr(g,'semantic_matrix') for g in request.app.state.manager.graphs.values()):
         value['capabilities']['semantic_search']=True

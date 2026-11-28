@@ -17,13 +17,42 @@ def require_verified_base_commit(stage, args):
     _verified_base_commit.set(None)
 
 
-def bind_native_test_writer(browser, dashboard):
-    """Use the same admitted TEST Base database and release authority as the owner queue."""
+def native_node_writer(*, stage, database, identity, release_lease, require_current=None):
+    """One already bound lane; graph writes require the consumed browser proof."""
     import sqlite3
-    from .browser_owner_api import BrowserOwnerAPI
-    from .queue_dashboard import HostedQueueDashboard
     from prototypes.assertion_memory.processing_control import Conflict
     from prototypes.assertion_memory.queue_owner_domain import owner_operations
+
+    def perform(action, args):
+        try:
+            if require_current is not None:
+                require_current()
+            dispatch = owner_operations(database=database, release_lease=release_lease,
+                                        identity=identity, stage=stage)
+            if action == 'graph_node_preview' and args.get('expected_revision') == '0'*32:
+                return dispatch(action, {k: v for k, v in args.items() if k != 'expected_revision'},
+                                authorize=require_current)
+            if action == 'graph_node_remove':
+                def authorize(db):
+                    require_verified_base_commit(stage, args)
+                    if require_current is not None:
+                        require_current(db)
+                return dispatch(action, args, authorize=authorize)
+            raise ValueError('Unknown native node owner operation')
+        except nodes.NodeConflict:
+            raise
+        except Conflict:
+            raise nodes.NodeConflict('node_confirmation_stale') from None
+        except (OSError, ValueError, KeyError, sqlite3.Error):
+            raise APIError('owner_api_unavailable', 'Graph writer authority unavailable', 503) from None
+
+    return perform
+
+
+def bind_native_test_writer(browser, dashboard):
+    """Use the same admitted TEST Base database and release authority as the owner queue."""
+    from .browser_owner_api import BrowserOwnerAPI
+    from .queue_dashboard import HostedQueueDashboard
 
     if (type(browser) is not BrowserOwnerAPI or browser.stage != 'test' or browser.node_removal is not None
             or type(dashboard) is not HostedQueueDashboard or dashboard.stage != 'test'
@@ -34,25 +63,8 @@ def bind_native_test_writer(browser, dashboard):
         config = dashboard.metadata()
         return config['release_version'], config['generation']
 
-    def perform(action, args):
-        try:
-            dispatch = owner_operations(database=dashboard.db, release_lease=dashboard.release_lease,
-                                        identity=identity, stage='test')
-            if action == 'graph_node_preview' and args.get('expected_revision') == '0'*32:
-                return dispatch(action, {k: v for k, v in args.items() if k != 'expected_revision'})
-            if action == 'graph_node_remove':
-                def authorize(_db):
-                    require_verified_base_commit('test', args)
-                return dispatch(action, args, authorize=authorize)
-            raise ValueError('Unknown native node owner operation')
-        except nodes.NodeConflict:
-            raise
-        except Conflict:
-            raise nodes.NodeConflict('node_confirmation_stale') from None
-        except (OSError, ValueError, KeyError, sqlite3.Error):
-            raise APIError('owner_api_unavailable', 'Graph writer authority unavailable', 503) from None
-
-    browser.node_removal = perform
+    browser.node_removal = native_node_writer(stage='test', database=dashboard.db,
+                                             identity=identity, release_lease=dashboard.release_lease)
 
 
 async def control_nodes(api, request, prepare, data, owner, token_headers):

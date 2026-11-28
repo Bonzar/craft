@@ -1,7 +1,7 @@
 """Base owns one browser service and one canonical application DB per lane."""
 from dataclasses import dataclass
 from pathlib import Path
-from types import MappingProxyType
+from types import MappingProxyType, SimpleNamespace
 
 from .queue_pause_binding import TEST, PROD
 from .queue_rest import exact_database
@@ -54,30 +54,41 @@ def base_graph_component(stage, state, *, browser, dashboard, source_hint=None, 
 def base_browser_app(stage, *, config, private_port, verified_identity, release_lease,
                      interactive, machine_devices=None, test_dashboard=None, private_owner_queue=None):
     """Composition only; caller owns authorization, OS and listener custody."""
-    from apps.graph_viewer.server.browser_owner_api import configured_browser_api
     from apps.graph_viewer.server.queue_dashboard import HostedQueueDashboard
     from apps.graph_viewer.server.owner_snapshot_release_policy import enabled
-    from .browser_owner_binding import base_owner_browser
+    from .browser_owner_binding import NativeOwnerAuthority, base_owner_browser
     from .browser_surface import browser_surface
 
     lane=canonical_lane(stage,config=config,private_port=private_port)
     state=lane.base.root/'state'/'graph-state'  # existing owner store and materialized graph cache, not DB
+    authority=scheduler_config=None
     if test_dashboard is not None:
-        if (stage!='test' or type(test_dashboard) is not HostedQueueDashboard
-                or test_dashboard.stage!='test' or test_dashboard.db!=lane.base.db
+        if (type(test_dashboard) is not HostedQueueDashboard
+                or test_dashboard.stage!=stage or test_dashboard.db!=lane.base.db
                 or not callable(test_dashboard.activation)
                 or machine_devices is not None or private_owner_queue is not None):
-            raise ValueError('Wrong existing TEST Base scheduler projection')
-        browser=configured_browser_api(test_dashboard,ordinary_test_clear=True,native_test_batch_removal=True)
-    else:
-        if stage=='test':
-            raise ValueError('Canonical TEST Base scheduler projection required')
-        browser=base_owner_browser(stage=stage,config=config,verified_identity=verified_identity,
-            release_lease=release_lease,interactive_enabled=interactive,private_owner_queue=private_owner_queue,
-            **({} if machine_devices is None else {'machine_devices':machine_devices}))
-    if test_dashboard is not None:
-        from apps.graph_viewer.server.graph_node_owner_api import bind_native_test_writer
-        bind_native_test_writer(browser,test_dashboard)
+            raise ValueError('Wrong existing Base scheduler projection')
+        # Adapter for the existing admitted native dashboard contract. The
+        # shared owner composer below registers precisely the same effects.
+        release_lease=test_dashboard.release_lease
+        def verified_identity():
+            state=test_dashboard.metadata()
+            return state['release_version'],state['generation']
+        def scheduler_config():
+            state=test_dashboard.metadata()
+            return SimpleNamespace(processing_session_ids=state['processing_session_ids'],
+                provider='configured' if state['model_configured'] else 'none',
+                auto_process_fresh_mac=state['auto_process_fresh_mac'],
+                interactive_enabled=state['interactive_enabled'])
+        def ready():
+            with release_lease():
+                verified_identity()
+                return exact_database(lane.base.db) is not None
+        authority=NativeOwnerAuthority(lane.base.db,ready,True,True,True)
+    browser=base_owner_browser(stage=stage,config=config,verified_identity=verified_identity,
+        release_lease=release_lease,interactive_enabled=interactive,private_owner_queue=private_owner_queue,
+        authority=authority,scheduler_config=scheduler_config,
+        **({} if machine_devices is None else {'machine_devices':machine_devices}))
     graph=base_graph_component(stage,state,browser=browser,dashboard=test_dashboard,existing_owner_only=True,
                      native_test_dashboard=test_dashboard,
                      owner_snapshot_events=enabled(dashboard=test_dashboard,browser=browser))

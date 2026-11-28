@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest import TestCase
 
 from .browser_owner_binding import base_owner_browser
+from .mcp_server import ServiceConfig
 from prototypes.assertion_memory.storage import MemoryStore
 
 class OwnerTest(TestCase):
@@ -46,7 +47,7 @@ class OwnerTest(TestCase):
         def lease():
             yield
         with patch('prototypes.assertion_memory.browser_owner_binding.snapshot',return_value=fixture):
-            browser=base_owner_browser(stage='prod',config=SimpleNamespace(db=Path('/tmp/fixture.sqlite3')),
+            browser=base_owner_browser(stage='prod',config=ServiceConfig(db='/tmp/fixture.sqlite3',provider='none'),
                 verified_identity=lambda:None,release_lease=lease,interactive_enabled=False)
             original=BrowserOwnerAPI(stage='prod',perform=lambda *_:None,
                                      queue_snapshot=lambda **_:fixture)
