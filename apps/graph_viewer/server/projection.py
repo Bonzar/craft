@@ -4,11 +4,12 @@ import sqlite3
 import struct
 import time
 import uuid
+from functools import lru_cache
 from pathlib import Path
 from .providers.base import SOURCE_MEMBERSHIP_POLICY
 from .declared import declared_kind
 from .common import now, timestamp, APIError
-from .temporal import eligible, available_at
+from .temporal import available_at, eligible_with_known, projection_timestamp_cache
 from .status import apply_status,next_effective_at
 from .layout import pack,raw_bounds,padded_bounds,refresh_topic_geometry,VERSION
 from .transport import compress_binary
@@ -66,18 +67,19 @@ def insert_node(c, row, ordinal, states, ids, meta=None, *, kind_override=_INFER
 def copy_nodes(source, c, selection, captured, *, source_only_kinds=False, inactive_ids=frozenset()):
     states,ids={},{}
     counts={'undated_known_count':0,'excluded_unknown_valid_count':0,'future_valid_known_count':0}
+    normalize=projection_timestamp_cache()
+    cutoff=selection['at'] if selection['mode']=='known_then' else captured
     for row in source.execute('SELECT * FROM memory_assertions ORDER BY rowid'):
         if row['assertion_id'] in inactive_ids:
             continue
         meta=json.loads(row['metadata'])
-        cutoff=selection['at'] if selection['mode']=='known_then' else captured
-        known = available_at(row,meta)
+        known = available_at(row,meta,normalize=normalize)
         if known is not None and known<=cutoff:
             if row['valid_at'] is None:
                 counts['undated_known_count']+=1
-            elif timestamp(row['valid_at'])>(selection['at'] or captured):
+            elif normalize(row['valid_at'])>(selection['at'] or captured):
                 counts['future_valid_known_count']+=1
-        if not eligible(row,meta,selection,captured):
+        if not eligible_with_known(row,selection,captured,known,normalize=normalize):
             continue
         insert_node(c,row,len(ids),states,ids,meta,kind_override=meta.get('kind') if source_only_kinds else _INFER_KIND)
     if selection['mode']=='known_now' and selection['undated']=='separate':
@@ -86,17 +88,26 @@ def copy_nodes(source, c, selection, captured, *, source_only_kinds=False, inact
 
 
 def copy_edges(source,c,ids,cutoff,*,allow_unknown=True):
+    # The same persisted batch instant often applies to many edges.
+    # Keep the memo bounded and private to this immutable source transaction.
+    @lru_cache(maxsize=2048)
+    def in_scope(recorded):
+        return timestamp(recorded)<=cutoff
+    read=source.execute('SELECT edge_id,from_id,to_id,kind,recorded_at,metadata FROM memory_edges ORDER BY rowid')
+    read.row_factory=None
     ordinal=0
-    for row in source.execute('SELECT rowid,* FROM memory_edges ORDER BY rowid'):
-        recorded = row['recorded_at']
-        if row['from_id'] not in ids or row['to_id'] not in ids:
-            continue
-        if recorded is None and not allow_unknown or recorded is not None and timestamp(recorded)>cutoff:
-            continue
-        c.execute('INSERT INTO edges VALUES(?,?,?,?,?,?,?)',(ordinal,row['edge_id'],ids[row['from_id']],ids[row['to_id']],row['kind'],row['recorded_at'],row['metadata']))
-        ordinal+=1
+    def rows():
+        nonlocal ordinal
+        for edge_id,from_id,to_id,kind,recorded,metadata in read:
+            f,t=ids.get(from_id),ids.get(to_id)
+            if f is None or t is None:
+                continue
+            if not (allow_unknown if recorded is None else in_scope(recorded)):
+                continue
+            yield ordinal,edge_id,f,t,kind,recorded,metadata
+            ordinal+=1
+    c.executemany('INSERT INTO edges VALUES(?,?,?,?,?,?,?)',rows())
     return ordinal
-
 
 def copy_sources(source,c,cutoff,min_rowid=0):
     tables={r[0] for r in source.execute("SELECT name FROM sqlite_master WHERE type='table'")}
