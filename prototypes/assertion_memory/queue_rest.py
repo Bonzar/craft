@@ -67,7 +67,7 @@ def exact_database(db):
     return info.st_dev,info.st_ino
 
 
-def snapshot(config, *, identity, database, interactive_enabled, limit, offset, lane='test',can_change=False,session_control=False,batch_cards=False,clear_ready=False):
+def snapshot(config, *, identity, database, interactive_enabled, limit, offset, lane='test',can_change=False,session_control=False,batch_cards=False,clear_ready=False,batch_remove=False):
     tag,generation=identity()
     before=exact_database(database)
     with closing(sqlite3.connect(database.as_uri()+'?mode=ro',uri=True,isolation_level=None,timeout=1)) as db:
@@ -90,7 +90,7 @@ def snapshot(config, *, identity, database, interactive_enabled, limit, offset, 
                 annotate_maintenance(db,data,selected)
             if (can_change() if callable(can_change) else can_change):
                 from .queue_item_removal import annotate
-                annotate(db,data)
+                annotate(db,data,batch_remove=batch_remove)
                 if clear_ready:
                     from .database_clear import describe
                     clear=describe(db,stage=lane,binding=[before,(tag,generation)])
@@ -143,10 +143,12 @@ def make_queue_rest(*, fingerprint, port, project):
         try:
             limit,offset=page(scope.get('query_string',b''))
             card_format=values(b'x-memory-queue-format')
+            batch_remove_format=values(b'x-memory-queue-batch-remove')
             from .database_clear import RESET_HEADER,RESET_FORMAT
             old_reset=values(b'x-memory-queue-reset')
             reset_format=values(RESET_HEADER)
             if (card_format not in ([],[b'batch-cards-v1']) or old_reset not in ([],[b'ready-v1'])
+                    or batch_remove_format not in ([],[b'atomic-v1']) or batch_remove_format and not card_format
                     or reset_format not in ([],[RESET_FORMAT]) or old_reset and reset_format):
                 raise ValueError()
             if values(b'content-length') not in ([],[b'0']) or values(b'transfer-encoding'):
@@ -162,6 +164,7 @@ def make_queue_rest(*, fingerprint, port, project):
             async with gate:
                 result=await asyncio.to_thread(project,limit=limit,offset=offset,
                     **({'batch_cards':True} if card_format else {}),
+                    **({'batch_remove':True} if batch_remove_format else {}),
                     **({'clear_ready':True} if reset_format else {}))
         except (ValueError,OSError,sqlite3.Error):
             return await reply(503,{'error':'unavailable'})
