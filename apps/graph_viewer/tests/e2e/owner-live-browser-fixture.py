@@ -81,6 +81,78 @@ def canonical_preview_fixture(run, static, cert, key):
 
 
 
+def packed_batch_fixture(run, static, cert, key):
+    from prototypes.assertion_memory.capture_batch import capture, authorized_machine_batch
+    from prototypes.assertion_memory.mcp_server import ServiceConfig
+    from prototypes.assertion_memory.queue_owner_domain import owner_operations
+    from prototypes.assertion_memory.queue_rest import snapshot
+    from prototypes.assertion_memory.storage import MemoryStore
+
+    db = run / 'batch.sqlite3'
+    config = ServiceConfig(db=str(db), provider='none', processing_session_ids=[])
+    identity = lambda: ('assertion-memory-v2.0.0', 'a' * 64)
+    batch_id = 'b' * 64
+    session = 'qa-packed-batch'
+    with MemoryStore(db) as store:
+        service = config.service(store)
+        stream = service.ingest_register('qa-neutral-source', session)
+        packet = [dict(session_id=session, message_id=f'qa-{i}', actor_id=role, role=role,
+                       text=f'Fictional {role} text', source=f'fixture://source/{i}',
+                       delivery={k: stream[k] for k in ('stream_id', 'epoch')} | {'seq': i})
+                  for i, role in enumerate(('user', 'assistant'), 1)]
+        with authorized_machine_batch():
+            capture(service, batch_id, packet)
+
+    apply_owner = owner_operations(database=db, release_lease=nullcontext, identity=identity, stage='test')
+    def perform(action, args):
+        result = apply_owner(action, args)
+        if action == 'item_remove':
+            with MemoryStore(db) as store:
+                with authorized_machine_batch():
+                    try:
+                        capture(config.service(store), batch_id, packet)
+                    except ValueError as error:
+                        replay_denied = 'cannot replay' in str(error)
+                    else:
+                        replay_denied = False
+                with store.transaction() as conn:
+                    counts = {table: conn.execute(f'SELECT count(*) FROM {table}').fetchone()[0]
+                              for table in ('memory_raw_events', 'memory_capture_jobs')}
+            receipt = run / 'batch-deletion.tmp'
+            receipt.write_text(json.dumps({'counts': counts, 'replay_denied': replay_denied}), encoding='ascii')
+            receipt.replace(run / 'batch-deletion.json')
+        return result
+
+    def project(*, limit, offset):
+        return snapshot(config, identity=identity, database=db, interactive_enabled=False,
+                        limit=limit, offset=offset, lane='test', can_change=True,
+                        batch_cards=True, batch_remove=True)
+
+    sock = socket.socket()
+    sock.bind(('127.0.0.1', 0))
+    sock.listen(16)
+    port = sock.getsockname()[1]
+    browser = BrowserOwnerAPI(stage='test', perform=perform, queue_snapshot=project, dashboard_live=False)
+    app = create_app(db, run / 'batch-state', password='synthetic-only-owner',
+                     synthetic_fixture=True, public_origin=f'https://127.0.0.1:{port}',
+                     browser_owner_api=browser)
+    frontend = StaticFiles(directory=static, html=True)
+
+    async def ingress(scope, receive, send):
+        if scope['type'] == 'http' and scope['path'].startswith('/visual/'):
+            path = scope['path'][len('/visual'):]
+            await frontend({**scope, 'path': path, 'raw_path': path.encode('ascii')}, receive, send)
+        else:
+            await app(scope, receive, send)
+
+    server = uvicorn.Server(uvicorn.Config(ingress, ssl_keyfile=str(key), ssl_certfile=str(cert),
+                                           host='127.0.0.1', port=port, proxy_headers=False, access_log=False))
+    thread = Thread(target=server.run, kwargs={'sockets': [sock]}, daemon=True)
+    thread.start()
+    (run / 'batch-port').write_text(str(port), encoding='ascii')
+    return server, thread, sock
+
+
 if __name__ == '__main__':
     run = Path(sys.argv[1]).resolve()
     run.mkdir(mode=0o700, exist_ok=False)
@@ -123,6 +195,7 @@ if __name__ == '__main__':
                 await frontend(scope, receive, send)
 
         preview = canonical_preview_fixture(run, static, cert, key) if variant == 'native' else None
+        batch = packed_batch_fixture(run, static, cert, key) if variant == 'packed' else None
         (run / 'fixture-port').write_text(str(port), encoding='ascii')
         try:
             uvicorn.Server(uvicorn.Config(
@@ -130,8 +203,9 @@ if __name__ == '__main__':
                 port=port, proxy_headers=False, log_level='warning', access_log=False,
             )).run(sockets=[sock])
         finally:
-            if preview is not None:
-                server, thread, preview_socket = preview
-                server.should_exit = True
-                thread.join(timeout=3)
-                preview_socket.close()
+            for fixture_server in (preview, batch):
+                if fixture_server is not None:
+                    server, thread, fixture_socket = fixture_server
+                    server.should_exit = True
+                    thread.join(timeout=3)
+                    fixture_socket.close()

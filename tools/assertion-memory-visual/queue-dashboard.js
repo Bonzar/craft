@@ -80,12 +80,12 @@
     });
     detail.append(summary,raw,copy);
     let cardAction=null;
-    if(!members&&controlsReady&&itemFeedback&&['source','maintenance'].includes(queueId)&&rev(item.remove_revision)&&item.status!=='running'&&(queueId!=='source'||item.phase==='extract')){
+    if(controlsReady&&itemFeedback&&['source','maintenance'].includes(queueId)&&rev(item.remove_revision)&&item.status!=='running'&&(queueId!=='source'||item.phase==='extract')){
       const change=element('div','','queue-remove-action');
       const key=queueId+':'+item.id;
       const source=queueId==='source';
       const effect=source?'source_and_queue':'queue_only';
-      const begin=action(source?'Удалить реплику и задачу':'Удалить из очереди',()=>{
+      const begin=action(members?'Удалить пакет из очереди':source?'Удалить реплику и задачу':'Удалить из очереди',()=>{
         if(deleting.has(key))return;
         const commit=action('Подтвердить удаление',async()=>{
           if(deleting.has(key)||!panel.open)return;
@@ -104,7 +104,7 @@
               return;
             }
             if(value.stage!==body.stage||value.queue_id!==queueId||value.item_id!==item.id||value.removed!==true||value.effect!==effect)throw Error();
-            itemFeedback.textContent=source?'Задача и сохранённая реплика удалены из базы. Исходный чат не изменён.':'Задача удалена из очереди. Реплики и граф не изменены.';
+            itemFeedback.textContent=members?'Пакет и его реплики удалены из базы памяти. Исходный чат не изменён.':source?'Задача и сохранённая реплика удалены из базы. Исходный чат не изменён.':'Задача удалена из очереди. Реплики и граф не изменены.';
           }catch{if(current===generation&&panel.open)itemFeedback.textContent='Удаление не подтверждено. Проверьте обновлённую очередь.';}
           finally{
             deleting.delete(key);
@@ -112,7 +112,7 @@
           }
         });
         const cancel=action('Отмена',()=>{change.replaceChildren(begin);begin.focus();});
-        change.replaceChildren(element('p',source?'Удалить задачу и реплику из базы памяти? Сообщение в исходном чате останется.':'Удалить только задачу из очереди? Реплики и граф останутся.'),commit,cancel);
+        change.replaceChildren(element('p',members?'Удалить весь пакет и все его реплики из базы памяти? Сообщения в исходном чате останутся.':source?'Удалить задачу и реплику из базы памяти? Сообщение в исходном чате останется.':'Удалить только задачу из очереди? Реплики и граф останутся.'),commit,cancel);
         commit.focus();
       });
       change.append(begin);cardAction=change;
