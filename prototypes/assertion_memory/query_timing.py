@@ -7,7 +7,7 @@ import os
 import re
 from time import monotonic
 
-from . import genai_traces
+from . import genai_traces, query_log_export
 
 _CONTEXT = ContextVar('query_timing', default={})
 _TRANSPORT = ContextVar('query_transport_trace', default=None)
@@ -96,6 +96,7 @@ def emit(stage, status, duration_ms=None, *, signal_count=None):
         event['duration_ms'] = duration_ms
     if type(signal_count) is int and 0 < signal_count < 2**31:
         event['signal_count'] = signal_count
+    query_log_export.record(event)
     # One bounded newline-terminated write to the journal stream; never log arbitrary user
     # strings, exceptions, stdout/stderr, paths, caller IDs, or contents of the query.
     try:

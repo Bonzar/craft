@@ -1,0 +1,74 @@
+{
+  "processors": {
+    "filter/project": {
+      "error_mode": "propagate",
+      "log_conditions": [
+        "scope.name != \"assertion_memory.query_timing\"",
+        "log.attributes[\"event\"] != \"memory_query_timing\"",
+        "log.attributes[\"schema_version\"] != 1",
+        "not IsString(log.attributes[\"stage\"])",
+        "not IsMatch(log.attributes[\"stage\"],\"^(answer_check_write|answer_persist|model_step_replay|query_response_wait|ready_result_persist|relation_frontier|relation_neighborhood|sufficiency)$\")",
+        "not IsString(log.attributes[\"status\"])",
+        "not IsMatch(log.attributes[\"status\"],\"^(start|ok|failed|timeout|interrupted|partial|ready|queued|reused|miss|unavailable|connection_signal|retry_signal)$\")",
+        "not IsString(log.attributes[\"trace_id\"])",
+        "not IsMatch(log.attributes[\"trace_id\"],\"^[0-9a-f]{32}$\")"
+      ]
+    },
+    "transform/project": {
+      "error_mode": "propagate",
+      "log_statements": [
+        "keep_keys(resource.attributes, [\"service.name\",\"deployment.environment.name\"])",
+        "keep_keys(scope.attributes, [])",
+        "set(scope.version, \"\")",
+        "set(log.body, \"memory_query_timing\")",
+        "set(log.severity_text, \"\")",
+        "set(log.event_name, \"\")",
+        "keep_keys(log.attributes, [\"event\", \"schema_version\", \"stage\", \"status\", \"trace_id\", \"duration_ms\"])",
+        "delete_key(log.attributes,\"duration_ms\") where log.attributes[\"duration_ms\"] != nil and not IsInt(log.attributes[\"duration_ms\"])",
+        "delete_key(log.attributes,\"duration_ms\") where IsInt(log.attributes[\"duration_ms\"]) and (log.attributes[\"duration_ms\"] < 0 or log.attributes[\"duration_ms\"] >= 9007199254740992)"
+      ]
+    }
+  },
+  "exporters": {
+    "otlphttp/monium_logs": {
+      "logs_endpoint": "https://ingest.monium.yandex.cloud/otlp/v1/logs",
+      "headers": {
+        "Authorization": "Api-Key ${env:MONIUM_LOGS_API_KEY}",
+        "x-monium-project": "${env:MONIUM_LOGS_PROJECT}"
+      },
+      "tls": {
+        "insecure": false,
+        "insecure_skip_verify": false
+      },
+      "timeout": "5s",
+      "compression": "gzip",
+      "retry_on_failure": {
+        "enabled": false
+      },
+      "sending_queue": {
+        "enabled": true,
+        "queue_size": 32,
+        "num_consumers": 1
+      }
+    }
+  },
+  "service": {
+    "pipelines": {
+      "logs": {
+        "receivers": [
+          "otlp/lane"
+        ],
+        "processors": [
+          "memory_limiter",
+          "filter/logs_lane",
+          "filter/project",
+          "transform/project",
+          "batch"
+        ],
+        "exporters": [
+          "otlphttp/monium_logs"
+        ]
+      }
+    }
+  }
+}
