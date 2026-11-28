@@ -266,7 +266,8 @@ def arm_database_reset_boundary(state, *, clock_ns):
     return state | {'cursor':st.st_size,'line':line,'skip_partial':partial,
                     'checkpoint':{'start':lo,'end':st.st_size,'sha256':hashlib.sha256(tail).hexdigest()},
                     'turn':None,'current':None,'dialogue_turn_roots':{},'witnesses':[],
-                    'interrupted_users':[],'interrupted_user_witnesses':[],'blocked_interrupted_batch':None,
+                    'interrupted_users':[],'interrupted_assistants':[],
+                    'interrupted_user_witnesses':[],'blocked_interrupted_batch':None,
                     'gaps':[gap for gap in state.get('gaps',[])
                             if gap not in ('interrupted_batch_exceeds_transport_limits',
                                            'visible_commentary_batch_exceeds_transport_limits')],
@@ -462,12 +463,14 @@ def _seal_turn(state):
     return pending, turn.pop('user_messages', [])
 
 
-def _hold_interrupted_users(state, witnesses, messages):
+def _hold_interrupted_users(state, witnesses, messages, visible_assistants):
     if not messages:
         return
     # Store source witnesses in the same SQLite session row as the verified cursor.
     # They must still match the physical transcript before the next delivery.
     state.setdefault('interrupted_users', []).extend(messages)
+    if visible_assistants:
+        state.setdefault('interrupted_assistants', []).extend(visible_assistants)
     prior = state.setdefault('interrupted_user_witnesses', [])
     seen = {(item['start'], item['end'], item['sha256']) for item in prior}
     for item in witnesses:
@@ -497,6 +500,14 @@ def _ordered_batch(*groups):
     return list(exact.values())
 
 
+def _visible_commentary(store, state, config, items, *, final_id=None):
+    turn_id = state['turn']['id']
+    return [_enqueue(store,state,item['row'],'assistant',item['text'],item['id'],
+        item['position'],'assistant',config,
+        'assistant:'+turn_id+':byte:'+str(item['offset']),deferred=True)
+        for item in items if item['id'] != final_id]
+
+
 def _complete_assistant(store, state, config, payload):
     commentary=(state['turn'].get('assistant_commentary',[]) if config.get('capture_batch') else [])
     pending, messages = _seal_turn(state)
@@ -514,27 +525,24 @@ def _complete_assistant(store, state, config, payload):
                 batch = config.get('capture_batch')
                 # An assistant-only background completion must not move a user's
                 # interrupted input into the wrong completed interaction.
-                carry = state.get('interrupted_users', []) if batch and messages else []
+                carried_users = state.get('interrupted_users', []) if batch and messages else []
+                carried_assistants = state.get('interrupted_assistants', []) if carried_users else []
+                carry = [*carried_users, *carried_assistants]
                 if any(a['session_id'] != state['session_id']
-                       or a['actor_id'] != config.get('actor_id', 'user')
+                       or a['actor_id'] != ('assistant' if a['role'] == 'assistant'
+                                          else config.get('actor_id', 'user'))
                        or a['scope'] != config.get('scope', 'default') for a,_ in carry):
                     raise ValueError('Interrupted users belong to another capture policy; review required')
-                interim=[]
-                for item in commentary:
-                    # Only the authoritative final row is retained when the
-                    # same native message ID is projected in both phases.
-                    if item['id']==source.get('id'):
-                        continue
-                    interim.append(_enqueue(store,state,item['row'],'assistant',item['text'],item['id'],
-                        item['position'],'assistant',config,
-                        'assistant:'+turn_id+':byte:'+str(item['offset']),deferred=True))
+                # Only the authoritative final row is retained when the
+                # same native message ID is projected in both phases.
+                interim=_visible_commentary(store,state,config,commentary,final_id=source.get('id'))
                 members = (_ordered_batch(carry, messages, interim, (assistant,)) if batch
                            else sorted([*messages, assistant],key=lambda entry:entry[1]))
                 if batch and (len(members)>_CAPTURE_BATCH_MAX_MEMBERS
                               or sum(len(a['text']) for a,_ in members)>_CAPTURE_BATCH_MAX_CHARS):
                     # No send and no split. The completed normalized members remain in the
                     # durable session row, with its cursor, for an explicit owner recovery.
-                    reason=('visible_commentary_batch_exceeds_transport_limits' if interim
+                    reason=('visible_commentary_batch_exceeds_transport_limits' if interim or carried_assistants
                             else 'interrupted_batch_exceeds_transport_limits')
                     state['blocked_interrupted_batch'] = {'members':members,'reason':reason}
                     state['gaps'].append(reason)
@@ -547,6 +555,7 @@ def _complete_assistant(store, state, config, payload):
                 queued = sum(store.enqueue(args,local_position=position) for args,position in members)
                 if carry:
                     state.pop('interrupted_users', None)
+                    state.pop('interrupted_assistants', None)
                     state.pop('interrupted_user_witnesses', None)
                 return queued
             if payload.get('last_agent_message'):
@@ -663,9 +672,16 @@ def _process(store, state, meta, row, offset, position, config):
         batch = config.get('capture_batch')
         queued = _flush_user(store, state, config, final=True) if batch else 0
         proof = [*state.get('witnesses', []), *turn.get('user_witnesses', []), row['_witness']]
+        commentary = turn.get('assistant_commentary', [])
         _, users = _seal_turn(state)
-        if batch:
-            _hold_interrupted_users(state, proof, users)
+        if batch and users:
+            # Explicit public commentary has its own occurrence proof. A final
+            # without matching completion remains uncertified and is not carried.
+            visible = _visible_commentary(store,state,config,commentary)
+            proof.extend(item['row']['_witness'] for item in commentary)
+            _hold_interrupted_users(state, proof, users, visible)
+        elif batch and commentary:
+            _exclude(state, 'assistant_commentary_without_final', len(commentary))
         elif users:
             _exclude(state, 'user_messages_in_turn_without_final', len(users))
         return queued
