@@ -1,0 +1,88 @@
+#!/usr/bin/env python3
+"""Owner-operated one-file update for Mac capture #426; no network or data migration."""
+import argparse
+import hashlib
+import os
+from pathlib import Path
+import subprocess
+import sys
+
+BASE_UPDATER_COMMIT = 'e72c87801b2a4ec1828886085972cf3ff273fe45'
+BASE_UPDATER_BLOB = '00b95184801fc922a3828fe921bc06531e2b4e20'
+SOURCE_COMMIT = 'e72c87801b2a4ec1828886085972cf3ff273fe45'
+PINS = {'native_capture.py': ('520404d2b94d1a1e68416df88bcb397d3ff8b587',
+                             '7b68866fd923bd865b223900a91d71b832fd51ae')}
+COMPANIONS = {'artifacts.py': '96923de5bcd09dc73489504a778081ee1cfe689a', 'capture_worker.py': '7a928de7d050b0ccb4635e69db3a9a4b541015c6', 'fresh_policy.py': '1f389de59b4b0b972c90a904187331ef18a4e312', 'frontier.py': '686c4da8e93536b0cce8a156e98b44f64bbc4c74', 'headers.py': 'b2b4cdc3a2da008e6cdf52af1ff69f1a781f4612', 'outbox.py': '810bd87ca952320a7d5039f8c1734d209c45852f', 'private_http.py': '06344318f6ed5cccec795b6b3992682169ccd746', 'remote_client.py': '3fe6fcf042ebf6c1c0bb58173fbd930ae6f7ecdf', 'repair.py': 'c0807b19b280d871874450ceed7ce9397e9e1324', 'tool_projection.py': 'dbea50f426213090403b458f1559843e5bf922d6', 'user_projection.py': 'cd872ac481253af6e559c3946265bec5312cce29'}
+# This capture-only patch uses byte-identical private HTTP/frontier/outbox code.
+# Confirmation concerns the already-enrolled PROD profile, not a new Base release.
+EXISTING_PROTOCOL = 'unchanged-existing-prod-capture'
+
+
+def blob(data):
+    return hashlib.sha1(f'blob {len(data)}'.encode('ascii')+bytes([0])+data).hexdigest()
+
+
+def load_updater(checkout):
+    git=['git','-C',str(checkout),'--no-replace-objects']
+    cfg=subprocess.run(git+['config','--get-regexp',
+            r'^(remote[.].*[.]promisor|extensions[.]partialclone)$'],
+            stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=10)
+    if cfg.returncode!=1:
+        raise ValueError('Expected complete local source')
+    p=subprocess.run(git+['show',BASE_UPDATER_COMMIT+':tools/assertion-memory-mac-v2'],
+        stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,check=True,timeout=15,
+        env={**os.environ,'GIT_NO_LAZY_FETCH':'1'})
+    if len(p.stdout)>32768 or blob(p.stdout)!=BASE_UPDATER_BLOB:
+        raise ValueError('Existing reviewed updater blob did not match')
+    namespace={'__name__':'approved_capture_updater'}
+    exec(compile(p.stdout,'<approved five-file updater substrate>','exec'),namespace)
+    return namespace
+
+
+
+def configure(namespace):
+    original=namespace['run']
+    old_read=namespace['read_file']
+
+    def guard(home):
+        folder=home.resolve()
+        for item in ('.codex','jarvis','modules','assertion-memory','lib'):
+            folder=namespace['safe_dir'](folder/item)
+        for name, pin in COMPANIONS.items():
+            if blob(old_read(folder/name, mode=0o644))!=pin:
+                raise ValueError('Unexpected unchanged capture companion')
+
+    def run(home, repo, *, mode, quiesced=False, existing_prod=False, no_clear=False):
+        if mode=='apply' and not existing_prod:
+            raise ValueError('Confirm this is the existing PROD machine binding')
+        guard(home)
+        result=original(home,repo,mode=mode,quiesced=quiesced,
+                        prod=EXISTING_PROTOCOL if existing_prod else None,no_clear=no_clear)
+        guard(home)
+        return {'preflight_ok_five_files_only':'preflight_ok_one_file',
+                'installed_five_files':'installed_one_file',
+                'rolled_back_five_files':'rolled_back_one_file'}.get(result,result)
+    namespace.update(PINS=PINS,RELEASE=SOURCE_COMMIT,PROD_BASE=EXISTING_PROTOCOL,
+                     BACKUP='.capture-visible-agent-rollback-'+SOURCE_COMMIT[:12])
+    return run
+
+
+def main():
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('mode', choices=['plan','apply','rollback'])
+    parser.add_argument('--checkout',type=Path,required=True)
+    parser.add_argument('--operator-quiesced',action='store_true')
+    parser.add_argument('--confirm-existing-prod-binding',action='store_true')
+    parser.add_argument('--confirm-no-clear',action='store_true')
+    args=parser.parse_args()
+    if sys.platform!='darwin':
+        parser.exit(2,'This package is only for the enrolled Mac.\n')
+    try:
+        run=configure(load_updater(args.checkout))
+        print(run(Path.home(),args.checkout,mode=args.mode,quiesced=args.operator_quiesced,
+                  existing_prod=args.confirm_existing_prod_binding,no_clear=args.confirm_no_clear))
+    except (ValueError,OSError,subprocess.SubprocessError):
+        parser.exit(2,'Capture updater guard refused; check the exact source, binding and collector state.\n')
+
+if __name__=='__main__':
+    main()
