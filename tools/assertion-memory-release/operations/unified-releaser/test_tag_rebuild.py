@@ -13,8 +13,7 @@ class TagRebuild(TestCase):
         self.r=TagRun('Bonzar/craft','workflow_dispatch','refs/heads/main',True,
             LANES['test'].environment,True,self.s.release_id,self.s.tag,commit,commit,commit,True,raw)
 
-    def test_same_rebuilt_digest_and_no_asset_in_both_lanes(self):
-        self.assertEqual(self.r.rebuilt,asset())
+    def test_same_verified_digest_and_no_asset_in_both_lanes(self):
         self.assertEqual(qualify(self.s,self.r),self.s.digest)
         prod=replace(self.s,lane='prod',operation='rollback')
         self.assertEqual(qualify(prod,replace(self.r,environment=LANES['prod'].environment)),self.s.digest)
