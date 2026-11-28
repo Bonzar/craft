@@ -142,6 +142,14 @@ def _lookup_gap(engine, question, gap, bindings):
     return fresh_records, fresh_bases
 
 
+@timing.timed('sufficiency')
+def _check_sufficiency(engine, records, bindings, instructions, *, exact=False):
+    verdict = engine._call('Check ready thought', records, bindings, instructions)
+    if exact:
+        exact_fields(verdict, {'verdict', 'question', 'text'})
+    return verdict
+
+
 def answer_selected(engine, question, selected, *, neighborhood, additional=(), seen_packets=None,
                     raw_material=((), ()), allow_partial=False):
     """Use one selected location; navigation owns any subsequent missing question.
@@ -165,8 +173,8 @@ def answer_selected(engine, question, selected, *, neighborhood, additional=(), 
     can_ready = (selected.metadata.get('verification') != 'legacy_unverified'
                  and not engine._is_parallel_alternative(selected) and engine._fresh(selected))
     if can_ready:
-        decision = engine._call('Check ready thought', [{'role': 'question', 'text': question}, *records], bindings, READINESS)
-        exact_fields(decision, {'verdict', 'question', 'text'})
+        decision = _check_sufficiency(engine, [{'role': 'question', 'text': question}, *records],
+                                      bindings, READINESS, exact=True)
         reason = semantic_text(decision.get('text'))
         if decision.get('verdict') == 'ready':
             return selected
@@ -180,7 +188,7 @@ def answer_selected(engine, question, selected, *, neighborhood, additional=(), 
             if not fresh_records:
                 raise PartialMemoryAnswer(selected,gap)
             records,bindings = engine._merge_material(records,bindings,fresh_records,fresh_bases)
-            check = engine._call('Check ready thought',
+            check = _check_sufficiency(engine,
                 [{'role':'question','text':question},{'role':'gap_question','text':gap},*records],
                 bindings,GAP_READINESS)
             if check['verdict'] != 'build' or check['question'] is not None:
