@@ -115,7 +115,7 @@ class Tickets:
         del self.pending[token]
 
 class BrowserOwnerAPI:
-    def __init__(self, *, stage, perform, queue_snapshot, clear_enabled=False, dashboard_live=True, clock=time.time, node_removal=None, single_clear=False):
+    def __init__(self, *, stage, perform, queue_snapshot, clear_enabled=False, dashboard_live=True, clock=time.time, node_removal=None, single_clear=False, clear_ready=None, node_removal_ready=None):
         if stage not in ('test','prod') or not callable(perform) or not callable(queue_snapshot) or type(dashboard_live) is not bool:
             raise ValueError('Expected explicit Base browser API lane')
         self.stage,self.perform,self.queue_snapshot=stage,perform,queue_snapshot
@@ -127,6 +127,14 @@ class BrowserOwnerAPI:
         self.node_removal=node_removal
         self.tickets=Tickets(clock)
         self._device_owner=None
+        if any(callback is not None and not callable(callback) for callback in (clear_ready,node_removal_ready)):
+            raise ValueError('Expected verified owner writer readiness')
+        self.clear_ready=clear_ready
+        self.node_removal_ready=node_removal_ready
+
+    async def node_removal_available(self):
+        return self.node_removal is not None and (self.node_removal_ready is None
+            or await asyncio.to_thread(self.node_removal_ready))
 
     def attach_machine_devices(self, registry, release_guard, verified_identity):
         if self._device_owner is not None:
@@ -185,7 +193,7 @@ class BrowserOwnerAPI:
         if 'processing_control' in value:
             value['processing_control']={**value['processing_control'],'can_change':False}
         clear=value.pop('database_clear',None)
-        if self.single_clear:
+        if self.single_clear and (self.clear_ready is None or await asyncio.to_thread(self.clear_ready)):
             value['capabilities']['owner_database_clear_post']=True
         elif clear is not None and self.graph_ready(request,clear['scope']):
             value['database_clear']={k:clear[k] for k in ('can_clear','revision','capture_rearm')}
